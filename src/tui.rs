@@ -431,10 +431,7 @@ fn key_hints(hints: &'static str) -> Line<'static> {
         }
         let (keys, action) = hint.split_once(' ').unwrap_or((hint, ""));
         spans.push(Span::styled(keys, key));
-        spans.push(Span::styled(
-            format!(" {action}"),
-            Style::new().fg(Color::Gray),
-        ));
+        spans.push(Span::raw(format!(" {action}")));
     }
     spans.push(Span::raw(" "));
     Line::from(spans)
