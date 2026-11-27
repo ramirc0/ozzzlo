@@ -73,6 +73,8 @@ enum Command {
         #[command(subcommand)]
         action: Option<AlarmAction>,
     },
+    /// Bond this computer with the case so it accepts commands.
+    Pair,
     /// Query every readable function and print the raw replies.
     Dump,
     /// Send one Get frame given as spaced hex, such as `02 02 01 00`.
@@ -147,6 +149,18 @@ async fn main() {
 }
 
 async fn run(command: Command) -> anyhow::Result<()> {
+    if matches!(command, Command::Pair) {
+        let announce = || println!("Open the case lid and hold its button for 3 seconds.");
+        let newly_bonded = case::pair(announce)
+            .await
+            .context("pairing with the case")?;
+        if newly_bonded {
+            println!("Paired. The case now accepts commands from this computer.");
+        } else {
+            println!("Already paired. Nothing to do.");
+        }
+        return Ok(());
+    }
     let case = Case::connect().await.context("connecting to the case")?;
     let mut snapshot = Snapshot::default();
     match command {
@@ -254,6 +268,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
             }
             print_alarms(&snapshot);
         }
+        Command::Pair => bail!("pairing is handled before connecting"),
         Command::Dump => dump(&case).await?,
         Command::Raw { hex } => {
             let request: Frame = hex.join(" ").parse().context("parsing the frame")?;

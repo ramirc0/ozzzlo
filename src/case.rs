@@ -14,6 +14,8 @@ use crate::osp::{ErrorCode, Frame, FrameError, Function};
 
 const OSP_SERVICE: Uuid = Uuid::from_u128(0x0000fcbc_0000_1000_8000_00805f9b34fb);
 const OSP_CHARACTERISTIC: Uuid = Uuid::from_u128(0x1732c22e_048b_11ee_be56_0242ac120002);
+const DEVICE_INFORMATION_CHARACTERISTIC: Uuid =
+    Uuid::from_u128(0x1732b6a8_048b_11ee_be56_0242ac120002);
 const FIRMWARE_UPDATE_CHARACTERISTIC: Uuid =
     Uuid::from_u128(0x1732c346_048b_11ee_be56_0242ac120002);
 
@@ -22,6 +24,8 @@ const LE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DISCOVERY_ATTEMPTS: u32 = 20;
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+const PAIRING_MODE_POLLS: u32 = 120;
+const PAIRING_MODE_OFF: Function = Function { block: 4, id: 8 };
 
 /// Why the case could not be reached or did not do what was asked.
 #[derive(Debug)]
@@ -40,6 +44,8 @@ pub enum Error {
     Refused(Function, ErrorCode),
     /// The frame targets a function that could damage the case.
     Hazardous(Function),
+    /// The case never entered pairing mode.
+    NotInPairingMode,
     /// A frame could not be encoded.
     Frame(FrameError),
     /// BlueZ reported a failure.
@@ -65,6 +71,7 @@ impl fmt::Display for Error {
             Self::NoReply(function) => write!(f, "the case did not answer {function}"),
             Self::Refused(function, code) => write!(f, "the case refused {function}: {code}"),
             Self::Hazardous(function) => write!(f, "refusing to send {function}: it is hazardous"),
+            Self::NotInPairingMode => write!(f, "the case did not enter pairing mode in time"),
             Self::Frame(error) => write!(f, "{error}"),
             Self::Bluetooth(error) => write!(f, "Bluetooth: {error}"),
         }
@@ -108,25 +115,7 @@ impl Case {
     /// cannot be reached, and with `Bluetooth` when BlueZ reports a failure.
     pub async fn connect() -> Result<Self, Error> {
         let session = Session::new().await?;
-        let adapter = session.default_adapter().await?;
-        let mut case = None;
-        for address in adapter.device_addresses().await? {
-            let device = adapter.device(address)?;
-            let offers_osp = device
-                .uuids()
-                .await?
-                .is_some_and(|uuids| uuids.contains(&OSP_SERVICE));
-            if offers_osp {
-                case = Some(device);
-                break;
-            }
-        }
-        let device = case.ok_or(Error::NoCase)?;
-        let object_path = format!(
-            "/org/bluez/{}/dev_{}",
-            adapter.name(),
-            device.address().to_string().replace(':', "_")
-        );
+        let (device, object_path) = known_case(&session).await?;
 
         let bearer_path = object_path.clone();
         let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
@@ -137,25 +126,9 @@ impl Case {
             _ => false,
         };
         if !linked {
-            log::info!("connecting to {} over LE", device.address());
-            let connected = tokio::task::spawn_blocking(move || le_connect(&object_path)).await;
-            if !matches!(connected, Ok(Ok(()))) {
-                log::warn!("LE-only connect failed ({connected:?}), using Device1.Connect");
-                device.connect().await.map_err(|error| {
-                    log::warn!("connect failed: {error}");
-                    Error::Disconnected
-                })?;
-            }
+            link_over_le(&device, object_path).await?;
         }
-        let mut osp = None;
-        for _ in 0..DISCOVERY_ATTEMPTS {
-            osp = characteristic(&device, OSP_CHARACTERISTIC).await;
-            if osp.is_some() {
-                break;
-            }
-            sleep(DISCOVERY_INTERVAL).await;
-        }
-        let osp = osp.ok_or(Error::Disconnected)?;
+        let osp = discovered(&device, OSP_CHARACTERISTIC).await?;
         let firmware_update = characteristic(&device, FIRMWARE_UPDATE_CHARACTERISTIC)
             .await
             .ok_or(Error::Disconnected)?;
@@ -255,6 +228,111 @@ impl Case {
     }
 }
 
+/// Bonds this host with the case over LE, which the case allows only in pairing mode.
+///
+/// Calls `on_waiting` once if the case is not in pairing mode yet, then waits
+/// for the user to hold the case button. Returns `false` if a bond already
+/// existed.
+///
+/// # Errors
+///
+/// Fails with `NoCase` or `Disconnected` when the case cannot be reached,
+/// `NotInPairingMode` when the wait runs out, and `Bluetooth` when BlueZ
+/// rejects the pairing.
+pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
+    let session = Session::new().await?;
+    let (device, object_path) = known_case(&session).await?;
+    let bearer_path = object_path.clone();
+    let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
+    match bearer {
+        Ok(Some(LeBearer { bonded: true, .. })) => return Ok(false),
+        Ok(Some(LeBearer {
+            connected: true, ..
+        })) => {}
+        _ => link_over_le(&device, object_path).await?,
+    }
+    let information = discovered(&device, DEVICE_INFORMATION_CHARACTERISTIC).await?;
+    let mut on_waiting = Some(on_waiting);
+    let mut polls = 0;
+    while !pairing_mode_is_on(&information.read().await?) {
+        if let Some(announce) = on_waiting.take() {
+            announce();
+        }
+        polls += 1;
+        if polls > PAIRING_MODE_POLLS {
+            return Err(Error::NotInPairingMode);
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    log::info!("the case is in pairing mode, pairing");
+    // Without an agent of our own, the desktop's agent may prompt the user.
+    let _agent = session
+        .register_agent(bluer::agent::Agent::default())
+        .await?;
+    device.pair().await?;
+    log::info!("paired with {}", device.address());
+    drop(session);
+
+    // The vendor app ends pairing mode itself once the bond exists.
+    let case = Case::connect().await?;
+    let mut leave_pairing_mode = Frame::start(PAIRING_MODE_OFF);
+    leave_pairing_mode.payload = vec![0];
+    case.send(&leave_pairing_mode).await?;
+    Ok(true)
+}
+
+/// Whether the unencrypted device information blob reports pairing mode.
+///
+/// The flags are the big-endian `u16` at bytes 17 and 18. Bit 0 is pairing mode.
+fn pairing_mode_is_on(information: &[u8]) -> bool {
+    information.get(18).is_some_and(|flags| flags & 1 == 1)
+}
+
+/// Finds the first device BlueZ knows that offers the OSP service.
+async fn known_case(session: &Session) -> Result<(Device, String), Error> {
+    let adapter = session.default_adapter().await?;
+    for address in adapter.device_addresses().await? {
+        let device = adapter.device(address)?;
+        let offers_osp = device
+            .uuids()
+            .await?
+            .is_some_and(|uuids| uuids.contains(&OSP_SERVICE));
+        if offers_osp {
+            let object_path = format!(
+                "/org/bluez/{}/dev_{}",
+                adapter.name(),
+                address.to_string().replace(':', "_")
+            );
+            return Ok((device, object_path));
+        }
+    }
+    Err(Error::NoCase)
+}
+
+async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error> {
+    log::info!("connecting to {} over LE", device.address());
+    let connected = tokio::task::spawn_blocking(move || le_connect(&object_path)).await;
+    if !matches!(connected, Ok(Ok(()))) {
+        log::warn!("LE-only connect failed ({connected:?}), using Device1.Connect");
+        device.connect().await.map_err(|error| {
+            log::warn!("connect failed: {error}");
+            Error::Disconnected
+        })?;
+    }
+    Ok(())
+}
+
+/// Waits for GATT discovery to expose the characteristic.
+async fn discovered(device: &Device, uuid: Uuid) -> Result<Characteristic, Error> {
+    for _ in 0..DISCOVERY_ATTEMPTS {
+        if let Some(found) = characteristic(device, uuid).await {
+            return Ok(found);
+        }
+        sleep(DISCOVERY_INTERVAL).await;
+    }
+    Err(Error::Disconnected)
+}
+
 async fn characteristic(device: &Device, uuid: Uuid) -> Option<Characteristic> {
     for service in device.services().await.ok()? {
         if service.uuid().await.ok()? == OSP_SERVICE {
@@ -297,4 +375,20 @@ fn le_connect(object_path: &str) -> Result<(), dbus::Error> {
     let bus = Connection::new_system()?;
     bus.with_proxy("org.bluez", object_path, LE_CONNECT_TIMEOUT)
         .method_call(LE_BEARER, "Connect", ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_mode_is_bit_zero_of_the_last_flag_byte() {
+        let mut information = [
+            0, 3, 26, 66, 1, 0, 122, 5, 5, 0, 0, 0, 0, 45, 0, 47, 9, 0, 6,
+        ];
+        assert!(!pairing_mode_is_on(&information));
+        information[18] = 7;
+        assert!(pairing_mode_is_on(&information));
+        assert!(!pairing_mode_is_on(&information[..10]));
+    }
 }
