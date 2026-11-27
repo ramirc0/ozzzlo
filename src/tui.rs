@@ -47,13 +47,14 @@ enum Tab {
     Alarms,
     Settings,
     Device,
+    Log,
 }
 
-const TABS: [(Tab, &str, &str); 4] = [
+const TABS: [(Tab, &str, &str); 5] = [
     (
         Tab::Sounds,
         "Sounds",
-        "j/k move · enter play · space pause · +/- vol · 1-4 tab · ? help · q quit",
+        "j/k move · enter play · space pause · +/- vol · 1-5 tab · ? help · q quit",
     ),
     (
         Tab::Alarms,
@@ -68,12 +69,17 @@ const TABS: [(Tab, &str, &str); 4] = [
     (
         Tab::Device,
         "Device",
-        "r refresh · c connect · 1-4 tab · ? help · q quit",
+        "r refresh · c connect · 1-5 tab · ? help · q quit",
+    ),
+    (
+        Tab::Log,
+        "Log",
+        "j/k scroll · g top · G follow · 1-5 tab · ? help · q quit",
     ),
 ];
 
 const HELP: [&str; 13] = [
-    "1 2 3 4     switch tab (tab and shift-tab also work)",
+    "1 to 5      switch tab (tab and shift-tab also work)",
     "j k         move down and up (arrow keys also work)",
     "space       play or pause the current sound",
     "+ -         volume up and down",
@@ -131,6 +137,8 @@ pub struct App {
     sound_row: usize,
     alarm_row: usize,
     setting_row: usize,
+    /// Lines scrolled up from the newest log line. Zero follows the log.
+    log_scroll: usize,
     dialog: Option<AlarmDialog>,
     deleting: Option<Alarm>,
     showing_help: bool,
@@ -147,6 +155,7 @@ impl Default for App {
             sound_row: 0,
             alarm_row: 0,
             setting_row: 0,
+            log_scroll: 0,
             dialog: None,
             deleting: None,
             showing_help: false,
@@ -169,6 +178,12 @@ pub enum Action {
 fn stepped(row: usize, delta: isize, count: usize) -> usize {
     row.saturating_add_signed(delta)
         .min(count.saturating_sub(1))
+}
+
+/// Moves a log view `delta` lines down, where `scroll` counts lines up from
+/// the newest of `line_count`.
+fn scrolled(scroll: usize, delta: isize, line_count: usize) -> usize {
+    scroll.min(line_count).saturating_add_signed(-delta)
 }
 
 fn cycled(position: usize, delta: isize, count: usize) -> usize {
@@ -207,6 +222,7 @@ pub fn on_key(app: &mut App, snapshot: &Snapshot, key: KeyEvent) -> Action {
         KeyCode::Char('2') => app.tab = Tab::Alarms,
         KeyCode::Char('3') => app.tab = Tab::Settings,
         KeyCode::Char('4') => app.tab = Tab::Device,
+        KeyCode::Char('5') => app.tab = Tab::Log,
         KeyCode::Tab | KeyCode::BackTab => {
             let delta = if key.code == KeyCode::Tab { 1 } else { -1 };
             let position = TABS.iter().position(|(tab, ..)| *tab == app.tab);
@@ -244,6 +260,9 @@ pub fn on_key(app: &mut App, snapshot: &Snapshot, key: KeyEvent) -> Action {
                 }
                 Tab::Settings => app.setting_row = stepped(app.setting_row, delta, 3),
                 Tab::Device => {}
+                Tab::Log => {
+                    app.log_scroll = scrolled(app.log_scroll, delta, logging::recent().len());
+                }
             }
         }
         code => return on_tab_key(app, snapshot, code),
@@ -301,6 +320,8 @@ fn on_tab_key(app: &mut App, snapshot: &Snapshot, code: KeyCode) -> Action {
                 return Action::Send(requests_to_store(&toggled));
             }
         }
+        (Tab::Log, KeyCode::Char('g')) => app.log_scroll = usize::MAX,
+        (Tab::Log, KeyCode::Char('G')) => app.log_scroll = 0,
         (Tab::Settings, KeyCode::Char('h') | KeyCode::Left) => {
             return changed_setting(app.setting_row, -1, snapshot);
         }
@@ -482,6 +503,7 @@ pub fn draw(canvas: &mut Canvas, app: &App, snapshot: &Snapshot) {
         Tab::Alarms => draw_alarms(canvas, body, app, snapshot),
         Tab::Settings => draw_settings(canvas, body, app, snapshot),
         Tab::Device => draw_device(canvas, body, app, snapshot),
+        Tab::Log => draw_log(canvas, body, app.log_scroll, &logging::recent()),
     }
     if let Some(text) = &app.notice {
         let warning = Style::new().fg(Color::Yellow);
@@ -712,6 +734,28 @@ fn draw_device(canvas: &mut Canvas, area: Rect, app: &App, snapshot: &Snapshot) 
             .map(|(name, value)| Line::raw(format!("   {name:<14} {value}"))),
     );
     canvas.render_widget(Paragraph::new(lines), area);
+}
+
+/// Shows the newest log lines that fit, `scroll` lines up from the end.
+fn draw_log(canvas: &mut Canvas, area: Rect, scroll: usize, lines: &[String]) {
+    let height = usize::from(area.height);
+    let last = lines
+        .len()
+        .saturating_sub(scroll)
+        .max(height.min(lines.len()));
+    let visible = lines[last.saturating_sub(height)..last].iter().map(|line| {
+        let style = if line.contains(" ERROR ") {
+            Style::new().fg(Color::Red)
+        } else if line.contains(" WARN ") {
+            Style::new().fg(Color::Yellow)
+        } else if line.contains(" DEBUG ") || line.contains(" TRACE ") {
+            dim()
+        } else {
+            Style::new()
+        };
+        Line::styled(format!(" {line}"), style)
+    });
+    canvas.render_widget(Paragraph::new(visible.collect::<Vec<_>>()), area);
 }
 
 fn popup(canvas: &mut Canvas, area: Rect, title: &'static str, lines: Vec<Line<'static>>) {
@@ -1178,6 +1222,46 @@ mod tests {
         let screen_after = screen(&app, &snapshot, 80, 24);
         assert!(screen_after.contains("Edit alarm"));
         assert!(screen_after.contains("[M][T][W][T][F]"));
+    }
+
+    #[test]
+    fn the_log_tab_follows_the_newest_lines_and_scrolls_back() {
+        let lines: Vec<String> = (1..=40)
+            .map(|n| format!("03:00:00 INFO line {n}"))
+            .collect();
+        let shown = |scroll| {
+            let mut terminal = Terminal::new(TestBackend::new(40, 5)).unwrap();
+            terminal
+                .draw(|canvas| draw_log(canvas, canvas.area(), scroll, &lines))
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        assert!(shown(0).contains("line 40"));
+        assert!(shown(0).contains("line 36"));
+        assert!(!shown(0).contains("line 35"));
+        assert!(shown(10).contains("line 30"));
+        assert!(!shown(10).contains("line 31"));
+        assert!(shown(usize::MAX).contains("line 1 "));
+        assert!(shown(usize::MAX).contains("line 5"));
+    }
+
+    #[test]
+    fn log_scrolling_is_bounded_by_the_line_count() {
+        assert_eq!(scrolled(0, -1, 40), 1);
+        assert_eq!(scrolled(2, 1, 40), 1);
+        assert_eq!(scrolled(0, 1, 40), 0);
+        assert_eq!(scrolled(usize::MAX, 1, 40), 39);
+    }
+
+    #[test]
+    fn capital_g_returns_the_log_to_following() {
+        let snapshot = replayed();
+        let mut app = App::default();
+        press(&mut app, &snapshot, KeyCode::Char('5'));
+        press(&mut app, &snapshot, KeyCode::Char('g'));
+        assert_eq!(app.log_scroll, usize::MAX);
+        press(&mut app, &snapshot, KeyCode::Char('G'));
+        assert_eq!(app.log_scroll, 0);
     }
 
     #[test]

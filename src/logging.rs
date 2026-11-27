@@ -1,6 +1,7 @@
 //! Log file, optional stderr echo, and the panic hook.
 
 use std::backtrace::Backtrace;
+use std::collections::VecDeque;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
@@ -10,6 +11,9 @@ use anyhow::Context;
 use log::{Level, LevelFilter, Log, Metadata, Record};
 
 const ROTATE_ABOVE_BYTES: u64 = 1024 * 1024;
+const RECENT_LINES: usize = 2000;
+
+static RECENT: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 
 struct Logger {
     file: Mutex<File>,
@@ -48,6 +52,12 @@ impl Log for Logger {
         if let Ok(mut file) = self.file.lock() {
             let _ = writeln!(file, "{line}");
         }
+        if let Ok(mut recent) = RECENT.lock() {
+            if recent.len() == RECENT_LINES {
+                recent.pop_front();
+            }
+            recent.push_back(line.clone());
+        }
         if record.level() <= self.echo_level {
             eprintln!("{line}");
         }
@@ -58,6 +68,14 @@ impl Log for Logger {
             let _ = file.flush();
         }
     }
+}
+
+/// The log lines written since startup, oldest first, capped at the last 2000.
+pub fn recent() -> Vec<String> {
+    RECENT
+        .lock()
+        .map(|recent| recent.iter().cloned().collect())
+        .unwrap_or_default()
 }
 
 /// Where the log file lives: `$XDG_STATE_HOME/ozzzlo/ozzzlo.log`.
