@@ -10,6 +10,7 @@ pub mod audio;
 pub mod data;
 pub mod product_info;
 pub mod settings;
+pub mod sounds;
 pub mod status;
 
 /// Largest payload a one-byte length field can describe.
@@ -180,10 +181,7 @@ impl Function {
     pub fn is_hazardous(self) -> bool {
         matches!(
             (self.block, self.id),
-            (3 | 17, _)
-                | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21)
-                | (5, 10 | 29 | 30 | 35 | 36 | 37)
-                | (13, 1)
+            (3 | 17, _) | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) | (5, 10 | 29 | 35) | (13, 1)
         )
     }
 }
@@ -527,8 +525,12 @@ mod tests {
         for id in [3, 7, 15, 16, 18, 20, 21] {
             assert!(Function { block: 4, id }.is_hazardous());
         }
-        for id in [10, 29, 30, 35, 36, 37] {
+        for id in [10, 29, 35] {
             assert!(Function { block: 5, id }.is_hazardous());
+        }
+        // Replacing a sound is allowed: `ozzzlo sound replace` drives it.
+        for id in [30, 36, 37] {
+            assert!(!Function { block: 5, id }.is_hazardous());
         }
         assert!(Function { block: 13, id: 1 }.is_hazardous());
         assert!(!status::BATTERY_LEVEL.is_hazardous());

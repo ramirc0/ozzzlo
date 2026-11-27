@@ -5,7 +5,8 @@ use std::time::Duration;
 
 use bluer::gatt::remote::Characteristic;
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
-use bluer::{Device, Session, Uuid};
+use bluer::l2cap::{Security, SecurityLevel, SeqPacket, Socket, SocketAddr};
+use bluer::{Address, AddressType, Device, Session, Uuid};
 use dbus::blocking::Connection;
 use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
 use tokio::time::{sleep, timeout};
@@ -110,6 +111,60 @@ pub struct Case {
     replies: CharacteristicReader,
     // The case answers on the OSP characteristic only while this one is subscribed too.
     firmware_update: CharacteristicReader,
+    address: Address,
+}
+
+/// The case's L2CAP channel for bulk transfers. Frames use the BLE envelope.
+pub struct TransferChannel {
+    socket: SeqPacket,
+}
+
+impl TransferChannel {
+    /// Writes `frame` to the channel.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Hazardous` for a dangerous function and `Disconnected`
+    /// when the write fails.
+    pub async fn send(&self, frame: &Frame) -> Result<(), Error> {
+        if frame.function.is_hazardous() {
+            return Err(Error::Hazardous(frame.function));
+        }
+        let mut envelope = vec![0x00];
+        envelope.extend(frame.encode()?);
+        log::debug!("=> {frame}  {} {:?}", frame.function, frame.operator);
+        self.socket.send(&envelope).await.map_err(|error| {
+            log::warn!("channel write of {} failed: {error}", frame.function);
+            Error::Disconnected
+        })?;
+        Ok(())
+    }
+
+    /// Waits for the next frame the case sends on the channel.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Disconnected` when the channel closes.
+    pub async fn recv(&self) -> Result<Frame, Error> {
+        loop {
+            let mut packet = vec![0; self.socket.recv_mtu().unwrap_or(1024)];
+            let length = self.socket.recv(&mut packet).await.map_err(|error| {
+                log::warn!("channel read failed: {error}");
+                Error::Disconnected
+            })?;
+            if length == 0 {
+                return Err(Error::Disconnected);
+            }
+            log::trace!("<= raw {:02x?}", &packet[..length]);
+            match Frame::decode(&packet[1..length]) {
+                Ok(frame) => {
+                    log::debug!("<= {frame}  {} {:?}", frame.function, frame.operator);
+                    return Ok(frame);
+                }
+                Err(error) => log::warn!("undecodable channel packet: {error}"),
+            }
+        }
+    }
 }
 
 impl Case {
@@ -142,6 +197,7 @@ impl Case {
         let case = Self {
             firmware_update: subscription_to(&firmware_update).await?,
             replies: subscription_to(&osp).await?,
+            address: device.address(),
             writer: osp.write_io().await?,
             _session: session,
         };
@@ -204,10 +260,41 @@ impl Case {
         }
     }
 
+    /// Opens the case's L2CAP transfer channel on `psm`.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Disconnected` when the channel cannot be opened.
+    pub async fn open_transfer_channel(&self, psm: u16) -> Result<TransferChannel, Error> {
+        let opened = async {
+            let socket = Socket::<SeqPacket>::new_seq_packet()?;
+            socket.set_security(Security {
+                level: SecurityLevel::Medium,
+                key_size: 0,
+            })?;
+            socket
+                .connect(SocketAddr::new(self.address, AddressType::LePublic, psm))
+                .await
+        };
+        match timeout(LE_CONNECT_TIMEOUT, opened).await {
+            Ok(Ok(socket)) => {
+                log::info!(
+                    "transfer channel open on psm {psm} (send mtu {:?}, recv mtu {:?})",
+                    socket.send_mtu(),
+                    socket.recv_mtu()
+                );
+                Ok(TransferChannel { socket })
+            }
+            failed => {
+                log::warn!("transfer channel on psm {psm} did not open: {failed:?}");
+                Err(Error::Disconnected)
+            }
+        }
+    }
+
     /// Sends `request` and returns the frame that answers it.
     ///
     /// `seen` receives every frame that arrives meanwhile, the answer included.
-    /// An `Error` answer and a silent case both fail.
     ///
     /// # Errors
     ///
@@ -216,15 +303,35 @@ impl Case {
     pub async fn exchange(
         &self,
         request: &Frame,
+        seen: impl FnMut(&Frame),
+    ) -> Result<Frame, Error> {
+        self.exchange_until(request, |frame| frame.answers(request), REPLY_TIMEOUT, seen)
+            .await
+    }
+
+    /// Sends `request` and returns the first frame that `settles` it.
+    ///
+    /// `patience` is how long the case may stay silent before the wait fails.
+    /// `seen` receives every frame that arrives meanwhile.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Case::send`] does, with `NoReply` when the case stays silent, and
+    /// with `Refused` when the settling frame is an error reply.
+    pub async fn exchange_until(
+        &self,
+        request: &Frame,
+        settles: impl Fn(&Frame) -> bool,
+        patience: Duration,
         mut seen: impl FnMut(&Frame),
     ) -> Result<Frame, Error> {
         self.send(request).await?;
         loop {
-            let frame = timeout(REPLY_TIMEOUT, self.recv())
+            let frame = timeout(patience, self.recv())
                 .await
                 .map_err(|_| Error::NoReply(request.function))??;
             seen(&frame);
-            if frame.answers(request) {
+            if settles(&frame) {
                 return match frame.refusal() {
                     Some(code) => Err(Error::Refused(frame.function, code)),
                     None => Ok(frame),
