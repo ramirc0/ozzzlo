@@ -94,6 +94,21 @@ pub fn volume(frame: &Frame) -> Result<u8, Malformed> {
     }
 }
 
+/// A request to start or resume `loop_id`.
+pub fn play(loop_id: u8) -> Frame {
+    Frame::set_get(PLAYING_LOOP, vec![loop_id, PlayState::Playing as u8, 0])
+}
+
+/// A request to pause `loop_id`.
+pub fn pause(loop_id: u8) -> Frame {
+    Frame::set_get(PLAYING_LOOP, vec![loop_id, PlayState::Paused as u8, 0])
+}
+
+/// A request to stop `loop_id`.
+pub fn stop(loop_id: u8) -> Frame {
+    Frame::set_get(PLAYING_LOOP, vec![loop_id, PlayState::Stopped as u8, 0])
+}
+
 /// A request to change the sound loop volume to `level`, from 0 to 100.
 pub fn change_volume_to(level: u8) -> Frame {
     Frame::set_get(SOUND_LOOP_VOLUME, vec![level])
@@ -106,6 +121,13 @@ mod tests {
     #[test]
     fn volume_change_matches_the_vendor_frame() {
         assert_eq!(change_volume_to(40).to_string(), "05 09 02 01 28");
+    }
+
+    #[test]
+    fn playback_requests_match_the_vendor_frames() {
+        assert_eq!(play(18).to_string(), "05 07 02 03 12 01 00");
+        assert_eq!(pause(18).to_string(), "05 07 02 03 12 02 00");
+        assert_eq!(stop(18).to_string(), "05 07 02 03 12 00 00");
     }
 
     #[test]

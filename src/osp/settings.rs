@@ -1,6 +1,7 @@
 //! The Settings block: persistent preferences and alarms.
 
 use std::fmt;
+use std::str::FromStr;
 
 use super::{Frame, Function, Malformed};
 
@@ -13,6 +14,7 @@ pub const SLEEP_TIMER: Function = Function { block: 1, id: 13 };
 pub const AUTO_START: Function = Function { block: 1, id: 16 };
 pub const ALARM_SOUND_LIST: Function = Function { block: 1, id: 18 };
 pub const CURRENT_DATE_TIME: Function = Function { block: 1, id: 22 };
+pub const DELETE_ALARM: Function = Function { block: 1, id: 19 };
 pub const BLUETOOTH_MODE: Function = Function { block: 1, id: 23 };
 
 /// A sound stored on the buds, as the case lists it.
@@ -140,6 +142,31 @@ impl fmt::Display for Days {
     }
 }
 
+impl FromStr for Days {
+    type Err = String;
+
+    /// Parses `weekdays`, `weekends`, `daily`, `once`, or names such as `mon,wed,fri`.
+    fn from_str(text: &str) -> Result<Self, String> {
+        const NAMES: [&str; 7] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+        match text.to_lowercase().as_str() {
+            "once" => return Ok(Self(0)),
+            "daily" => return Ok(Self(0x7f)),
+            "weekdays" => return Ok(Self(0x3e)),
+            "weekends" => return Ok(Self(0x41)),
+            _ => {}
+        }
+        let mut mask = 0;
+        for name in text.to_lowercase().split(',') {
+            let day = NAMES
+                .iter()
+                .position(|known| *known == name)
+                .ok_or_else(|| format!("`{name}` is not a weekday such as mon or sat"))?;
+            mask |= 1 << day;
+        }
+        Ok(Self(mask))
+    }
+}
+
 /// One alarm slot on the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Alarm {
@@ -179,6 +206,65 @@ impl Alarm {
     }
 }
 
+/// A request to create or overwrite the alarm in `alarm.index`.
+pub fn store_alarm(alarm: &Alarm) -> Frame {
+    let record = vec![
+        alarm.index,
+        alarm.hour,
+        alarm.minute,
+        u8::from(alarm.enabled),
+        alarm.volume,
+        alarm.days.0,
+        alarm.sound,
+    ];
+    Frame::set_get(ALARMS, record)
+}
+
+/// A request to delete the alarm in slot `index`.
+pub fn delete_alarm(index: u8) -> Frame {
+    Frame::set_get(DELETE_ALARM, vec![index])
+}
+
+/// A request to make `loop_id` the selected sound loop.
+pub fn select_loop(loop_id: u8) -> Frame {
+    Frame::set_get(CURRENT_SOUND_LOOP, vec![loop_id])
+}
+
+/// A request to stop playback after `minutes`. Zero turns the timer off.
+pub fn sleep_after(minutes: u16) -> Frame {
+    Frame::set_get(SLEEP_TIMER, minutes.to_be_bytes().to_vec())
+}
+
+/// A request to change when a sound starts once the buds leave the case.
+pub fn auto_start(mode: AutoStart) -> Frame {
+    let payload = match mode {
+        AutoStart::Immediately => vec![0],
+        AutoStart::Off => vec![1],
+        AutoStart::WhenAsleep => vec![2],
+        AutoStart::AfterMinutes(minutes) => vec![3, minutes],
+    };
+    Frame::set_get(AUTO_START, payload)
+}
+
+/// A request to change whether the case accepts streamed audio.
+pub fn bluetooth(mode: BluetoothMode) -> Frame {
+    Frame::set_get(BLUETOOTH_MODE, vec![mode as u8])
+}
+
+/// A request to set the case's clock.
+pub fn set_clock(clock: &CaseClock) -> Frame {
+    let payload = vec![
+        (clock.year % 100) as u8,
+        clock.month,
+        clock.day,
+        clock.weekday,
+        clock.hour,
+        clock.minute,
+        clock.second,
+    ];
+    Frame::set_get(CURRENT_DATE_TIME, payload)
+}
+
 /// When a sound starts once the buds leave the case.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoStart {
@@ -197,6 +283,33 @@ impl AutoStart {
             [2] => Ok(Self::WhenAsleep),
             [3, minutes] => Ok(Self::AfterMinutes(minutes)),
             _ => Err(frame.malformed("a mode from 0 to 3, with minutes after mode 3")),
+        }
+    }
+}
+
+impl fmt::Display for AutoStart {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Immediately => write!(f, "immediately"),
+            Self::Off => write!(f, "off"),
+            Self::WhenAsleep => write!(f, "when asleep"),
+            Self::AfterMinutes(minutes) => write!(f, "after {minutes} min"),
+        }
+    }
+}
+
+impl FromStr for AutoStart {
+    type Err = String;
+
+    /// Parses `immediately`, `off`, `asleep`, or a delay in minutes.
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "immediately" => Ok(Self::Immediately),
+            "off" => Ok(Self::Off),
+            "asleep" => Ok(Self::WhenAsleep),
+            minutes => minutes.parse().map(Self::AfterMinutes).map_err(|_| {
+                format!("`{text}` is not immediately, off, asleep or a number of minutes")
+            }),
         }
     }
 }
@@ -221,12 +334,48 @@ impl BluetoothMode {
     }
 }
 
+impl fmt::Display for BluetoothMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Disabled => write!(f, "disabled"),
+            Self::Enabled => write!(f, "enabled"),
+            Self::PowerSaving => write!(f, "power-saving"),
+        }
+    }
+}
+
+impl FromStr for BluetoothMode {
+    type Err = String;
+
+    /// Parses `enabled`, `power-saving` or `disabled`.
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "disabled" => Ok(Self::Disabled),
+            "enabled" => Ok(Self::Enabled),
+            "power-saving" => Ok(Self::PowerSaving),
+            _ => Err(format!("`{text}` is not enabled, power-saving or disabled")),
+        }
+    }
+}
+
+impl fmt::Display for CaseClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+            self.year, self.month, self.day, self.hour, self.minute, self.second
+        )
+    }
+}
+
 /// The case's wall clock, which its alarms fire by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaseClock {
     pub year: u16,
     pub month: u8,
     pub day: u8,
+    /// Day of the week, where 0 is Sunday.
+    pub weekday: u8,
     pub hour: u8,
     pub minute: u8,
     pub second: u8,
@@ -236,17 +385,32 @@ impl CaseClock {
     /// Reads a `CurrentDateTime` reply: year since 2000, month, day, weekday,
     /// hour, minute, second.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
-        let [year, month, day, _weekday, hour, minute, second] = frame.payload[..] else {
+        let [year, month, day, weekday, hour, minute, second] = frame.payload[..] else {
             return Err(frame.malformed("seven date and time bytes"));
         };
         Ok(Self {
             year: 2000 + u16::from(year),
             month,
             day,
+            weekday,
             hour,
             minute,
             second,
         })
+    }
+
+    /// This computer's local wall time, which is what the vendor app writes.
+    pub fn now() -> Self {
+        let now = jiff::ZonedDateTime::now();
+        Self {
+            year: now.year().unsigned_abs(),
+            month: now.month().unsigned_abs(),
+            day: now.day().unsigned_abs(),
+            weekday: now.weekday().to_sunday_zero_offset().unsigned_abs(),
+            hour: now.hour().unsigned_abs(),
+            minute: now.minute().unsigned_abs(),
+            second: now.second().unsigned_abs(),
+        }
     }
 }
 
@@ -321,6 +485,72 @@ mod tests {
         assert_eq!(Days(0b0010_1010).to_string(), "Mon Wed Fri");
         assert_eq!(Days(0).to_string(), "once");
         assert_eq!(Days(0x7f).to_string(), "every day");
+    }
+
+    #[test]
+    fn modes_parse_what_they_display() {
+        for mode in [AutoStart::Immediately, AutoStart::Off] {
+            assert_eq!(mode.to_string().parse(), Ok(mode));
+        }
+        assert_eq!("asleep".parse(), Ok(AutoStart::WhenAsleep));
+        assert_eq!("30".parse(), Ok(AutoStart::AfterMinutes(30)));
+        assert!("soon".parse::<AutoStart>().is_err());
+        for mode in [
+            BluetoothMode::Disabled,
+            BluetoothMode::Enabled,
+            BluetoothMode::PowerSaving,
+        ] {
+            assert_eq!(mode.to_string().parse(), Ok(mode));
+        }
+    }
+
+    #[test]
+    fn days_parse_from_names_and_shorthands() {
+        assert_eq!("weekdays".parse(), Ok(Days(0x3e)));
+        assert_eq!("Mon,wed,FRI".parse(), Ok(Days(0b0010_1010)));
+        assert_eq!("once".parse(), Ok(Days(0)));
+        assert!("funday".parse::<Days>().is_err());
+    }
+
+    #[test]
+    fn requests_match_the_vendor_frames() {
+        let alarm = Alarm {
+            index: 3,
+            hour: 7,
+            minute: 30,
+            enabled: true,
+            volume: 60,
+            days: Days(0x3e),
+            sound: 8,
+        };
+        assert_eq!(
+            store_alarm(&alarm).to_string(),
+            "01 06 02 07 03 07 1e 01 3c 3e 08"
+        );
+        assert_eq!(delete_alarm(3).to_string(), "01 13 02 01 03");
+        assert_eq!(select_loop(18).to_string(), "01 08 02 01 12");
+        assert_eq!(sleep_after(45).to_string(), "01 0d 02 02 00 2d");
+        assert_eq!(
+            auto_start(AutoStart::WhenAsleep).to_string(),
+            "01 10 02 01 02"
+        );
+        assert_eq!(
+            auto_start(AutoStart::AfterMinutes(30)).to_string(),
+            "01 10 02 02 03 1e"
+        );
+        assert_eq!(
+            bluetooth(BluetoothMode::PowerSaving).to_string(),
+            "01 17 02 01 02"
+        );
+    }
+
+    #[test]
+    fn clock_request_round_trips_the_captured_reply() {
+        let clock = CaseClock::parse(&captured("01 16 03 07 1a 0b 1b 05 02 23 0e")).unwrap();
+        assert_eq!(
+            set_clock(&clock).to_string(),
+            "01 16 02 07 1a 0b 1b 05 02 23 0e"
+        );
     }
 
     #[test]

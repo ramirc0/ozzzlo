@@ -172,30 +172,11 @@ impl fmt::Display for Snapshot {
             (None, _) => "unknown".to_string(),
         };
         writeln!(f, "Sleep timer {timer}")?;
-        let auto_start = match self.auto_start {
-            Some(AutoStart::Immediately) => "immediately".to_string(),
-            Some(AutoStart::Off) => "off".to_string(),
-            Some(AutoStart::WhenAsleep) => "when asleep".to_string(),
-            Some(AutoStart::AfterMinutes(minutes)) => format!("after {minutes} min"),
-            None => "unknown".to_string(),
-        };
-        writeln!(f, "Auto-start  {auto_start}")?;
-        let bluetooth = match self.bluetooth_mode {
-            Some(BluetoothMode::Enabled) => "enabled",
-            Some(BluetoothMode::PowerSaving) => "power saving",
-            Some(BluetoothMode::Disabled) => "disabled",
-            None => "unknown",
-        };
-        writeln!(f, "Bluetooth   {bluetooth}")?;
+        writeln!(f, "Auto-start  {}", or_unknown(self.auto_start))?;
+        writeln!(f, "Bluetooth   {}", or_unknown(self.bluetooth_mode))?;
         let enabled = self.alarms.iter().filter(|alarm| alarm.enabled).count();
         writeln!(f, "Alarms      {enabled} on, {} set", self.alarms.len())?;
-        let clock = self.clock.map(|clock| {
-            format!(
-                "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-                clock.year, clock.month, clock.day, clock.hour, clock.minute, clock.second
-            )
-        });
-        writeln!(f, "Case clock  {}", or_unknown(clock))?;
+        writeln!(f, "Case clock  {}", or_unknown(self.clock))?;
         let firmware = self.firmware.as_ref().map(|firmware| {
             format!(
                 "case {} and {}, left {}, right {}",
