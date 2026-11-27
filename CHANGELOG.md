@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-27
+
 ### Added
 
 - `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
@@ -47,5 +49,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log file with every frame exchanged, and backtraces on crashes.
 - Refusal to send firmware-update, factory-reset and manufacturing commands.
 
-[Unreleased]: https://github.com/ramirc0/ozzzlo/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ramirc0/ozzzlo/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ramirc0/ozzzlo/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ramirc0/ozzzlo/releases/tag/v0.1.0
