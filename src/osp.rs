@@ -45,13 +45,6 @@ pub struct Function {
     pub id: u8,
 }
 
-/// Functions in the ProductInfo block.
-pub mod product_info {
-    use super::Function;
-
-    pub const PROTOCOL_VERSION: Function = Function { block: 0, id: 1 };
-}
-
 /// Functions in the Status block.
 pub mod status {
     use super::Function;
@@ -177,7 +170,7 @@ mod tests {
             0x00, 0x01, 0x03, 0x09, 0x30, 0x30, 0x2e, 0x30, 0x31, 0x2e, 0x30, 0x33, 0x00,
         ];
         let frame = Frame::decode(&captured).unwrap();
-        assert_eq!(frame.function, product_info::PROTOCOL_VERSION);
+        assert_eq!(frame.function, Function { block: 0, id: 1 });
         assert_eq!(frame.payload, b"00.01.03\0");
     }
 

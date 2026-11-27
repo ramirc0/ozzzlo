@@ -6,3 +6,7 @@ description = "Control Ozlo Sleepbuds from a Linux desktop"
 license = "MIT"
 
 [dependencies]
+bluer = { version = "0.17", features = ["bluetoothd"] }
+dbus = { version = "0.9", features = ["vendored"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "io-util"] }
