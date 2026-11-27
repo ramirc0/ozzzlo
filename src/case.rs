@@ -127,11 +127,25 @@ impl TransferChannel {
     /// Fails with `Hazardous` for a dangerous function and `Disconnected`
     /// when the write fails.
     pub async fn send(&self, frame: &Frame) -> Result<(), Error> {
+        self.write(frame, frame.encode()?).await
+    }
+
+    /// Writes `frame` to the channel with a two-byte length, the form the
+    /// case expects for file data.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`TransferChannel::send`] does.
+    pub async fn send_long(&self, frame: &Frame) -> Result<(), Error> {
+        self.write(frame, frame.encode_long()?).await
+    }
+
+    async fn write(&self, frame: &Frame, encoded: Vec<u8>) -> Result<(), Error> {
         if frame.function.is_hazardous() {
             return Err(Error::Hazardous(frame.function));
         }
         let mut envelope = vec![0x00];
-        envelope.extend(frame.encode()?);
+        envelope.extend(encoded);
         log::debug!("=> {frame}  {} {:?}", frame.function, frame.operator);
         self.socket.send(&envelope).await.map_err(|error| {
             log::warn!("channel write of {} failed: {error}", frame.function);

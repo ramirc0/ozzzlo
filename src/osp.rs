@@ -181,7 +181,7 @@ impl Function {
     pub fn is_hazardous(self) -> bool {
         matches!(
             (self.block, self.id),
-            (3 | 17, _) | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) | (5, 10 | 29 | 35) | (13, 1)
+            (3 | 17, _) | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) | (5, 10 | 35 | 36) | (13, 1)
         )
     }
 }
@@ -277,7 +277,7 @@ pub enum FrameError {
     Truncated,
     /// The operator nibble is outside the known set.
     UnknownOperator(u8),
-    /// The payload exceeds [`MAX_PAYLOAD`].
+    /// The payload does not fit the length field.
     PayloadTooLong(usize),
     /// A token in a hex string is not one byte of hex.
     NotHex(String),
@@ -288,9 +288,7 @@ impl fmt::Display for FrameError {
         match self {
             Self::Truncated => write!(f, "frame is shorter than its header or length field"),
             Self::UnknownOperator(byte) => write!(f, "unknown operator byte {byte:#04x}"),
-            Self::PayloadTooLong(len) => {
-                write!(f, "payload of {len} bytes exceeds {MAX_PAYLOAD}")
-            }
+            Self::PayloadTooLong(len) => write!(f, "payload of {len} bytes is too long"),
             Self::NotHex(token) => write!(f, "`{token}` is not a hex byte"),
         }
     }
@@ -373,6 +371,22 @@ impl Frame {
         Ok(bytes)
     }
 
+    /// Serializes the frame with a two-byte big-endian length, marked by the
+    /// high bit of the block byte. Sound transfers use this form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::PayloadTooLong`] if the payload exceeds 65535 bytes.
+    pub fn encode_long(&self) -> Result<Vec<u8>, FrameError> {
+        let length = u16::try_from(self.payload.len())
+            .map_err(|_| FrameError::PayloadTooLong(self.payload.len()))?;
+        let mut bytes = vec![self.function.block | 0x80, self.function.id];
+        bytes.push(self.operator as u8);
+        bytes.extend(length.to_be_bytes());
+        bytes.extend_from_slice(&self.payload);
+        Ok(bytes)
+    }
+
     /// Parses a frame from `bytes`.
     ///
     /// The high bit of the block byte marks a two-byte big-endian length.
@@ -414,13 +428,10 @@ impl Frame {
 impl fmt::Display for Frame {
     /// Writes the encoded frame as spaced hex, the form [`Frame::from_str`] reads.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut header = vec![self.function.block, self.function.id, self.operator as u8];
-        header.push(self.payload.len() as u8);
-        write!(f, "{}", spaced_hex(&header))?;
-        if !self.payload.is_empty() {
-            write!(f, " {}", spaced_hex(&self.payload))?;
+        match self.encode().or_else(|_| self.encode_long()) {
+            Ok(bytes) => write!(f, "{}", spaced_hex(&bytes)),
+            Err(error) => write!(f, "<{error}>"),
         }
-        Ok(())
     }
 }
 
@@ -525,16 +536,36 @@ mod tests {
         for id in [3, 7, 15, 16, 18, 20, 21] {
             assert!(Function { block: 4, id }.is_hazardous());
         }
-        for id in [10, 29, 35] {
+        for id in [10, 35, 36] {
             assert!(Function { block: 5, id }.is_hazardous());
         }
-        // Replacing a sound is allowed: `ozzzlo sound replace` drives it.
-        for id in [30, 36, 37] {
+        // Adding a sound is allowed: `ozzzlo sound add` drives it.
+        for id in [29, 30, 31, 37] {
             assert!(!Function { block: 5, id }.is_hazardous());
         }
         assert!(Function { block: 13, id: 1 }.is_hazardous());
         assert!(!status::BATTERY_LEVEL.is_hazardous());
         assert!(!Function { block: 4, id: 8 }.is_hazardous());
+    }
+
+    #[test]
+    fn long_encoding_round_trips_and_matches_the_captured_chunk_header() {
+        let frame = Frame {
+            function: sounds::TRANSFER,
+            operator: Operator::Start,
+            payload: vec![0xaa; 889],
+        };
+        let bytes = frame.encode_long().unwrap();
+        assert_eq!(bytes[..5], [0x85, 0x1e, 0x05, 0x03, 0x79]);
+        assert_eq!(Frame::decode(&bytes), Ok(frame));
+    }
+
+    #[test]
+    fn decodes_the_captured_chunk_acknowledgement() {
+        let frame: Frame = "85 1e 07 00 01 00".parse().unwrap();
+        assert_eq!(frame.function, sounds::TRANSFER);
+        assert_eq!(frame.operator, Operator::Processing);
+        assert_eq!(frame.payload, [0x00]);
     }
 
     #[test]

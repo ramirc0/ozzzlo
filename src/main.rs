@@ -17,7 +17,7 @@ use case::{Case, TransferChannel};
 use osp::audio::PlayState;
 use osp::data::{self, LogExtent, Recorder};
 use osp::settings::{Alarm, AutoStart, BluetoothMode, CaseClock, Days, Sound};
-use osp::sounds::{self, Bud};
+use osp::sounds::{self, Bud, Kind};
 use osp::status::BudsLocation;
 use osp::{Frame, Function, Operator, audio, product_info, settings, status};
 use snapshot::Snapshot;
@@ -94,7 +94,7 @@ enum Command {
         #[arg(long)]
         offline: bool,
     },
-    /// Inspect or replace the sound files stored on the buds.
+    /// Inspect or add to the sound files stored on the buds.
     Sound {
         #[command(subcommand)]
         action: SoundAction,
@@ -113,19 +113,24 @@ enum Command {
 #[derive(Subcommand)]
 enum SoundAction {
     /// Print the checksum each bud computes over its copy of sound ID.
-    Check { id: u8 },
-    /// Overwrite sound ID with LC3 files, one per bud. Both buds must be docked.
-    Replace {
+    Check {
         id: u8,
-        /// The ID the new sound takes. Defaults to keeping ID.
+        /// The store the sound is in.
+        #[arg(long, value_enum, default_value = "masking")]
+        kind: Kind,
+    },
+    /// Store a new sound on both buds as sound ID. Both buds must be docked.
+    Add {
+        id: u8,
+        /// The store the sound goes in.
+        #[arg(long, value_enum)]
+        kind: Kind,
+        /// The LC3 file for the left bud.
         #[arg(long)]
-        new_id: Option<u8>,
-        /// The file for the left bud.
+        left: PathBuf,
+        /// The LC3 file for the right bud.
         #[arg(long)]
-        left: Option<PathBuf>,
-        /// The file for the right bud.
-        #[arg(long)]
-        right: Option<PathBuf>,
+        right: PathBuf,
     },
 }
 
@@ -346,37 +351,32 @@ async fn run(command: Command) -> anyhow::Result<()> {
             }
         }
         Command::Sound {
-            action: SoundAction::Check { id },
+            action: SoundAction::Check { id, kind },
         } => {
             for bud in [Bud::Left, Bud::Right] {
-                let stored = stored_checksum(&case, bud, id).await?;
-                println!("{bud:?} bud, sound {id}: {stored:08X}");
+                let stored = stored_checksum(&case, bud, kind, id).await?;
+                println!("{bud:?} bud, {kind:?} sound {id}: {stored:08X}");
             }
         }
         Command::Sound {
             action:
-                SoundAction::Replace {
+                SoundAction::Add {
                     id,
-                    new_id,
+                    kind,
                     left,
                     right,
                 },
         } => {
-            let mut uploads = Vec::new();
+            let mut files = Vec::new();
             for (bud, path) in [(Bud::Left, left), (Bud::Right, right)] {
-                if let Some(path) = path {
-                    let file = std::fs::read(&path)
-                        .with_context(|| format!("reading {}", path.display()))?;
-                    sounds::vet(&file)
-                        .map_err(anyhow::Error::msg)
-                        .with_context(|| format!("checking {}", path.display()))?;
-                    uploads.push((bud, file));
-                }
+                let file =
+                    std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+                sounds::vet(&file)
+                    .map_err(anyhow::Error::msg)
+                    .with_context(|| format!("checking {}", path.display()))?;
+                files.push((bud, file));
             }
-            if uploads.is_empty() {
-                bail!("give a file with --left, --right or both");
-            }
-            replace_sound(&case, &mut snapshot, id, new_id.unwrap_or(id), &uploads).await?;
+            add_sound(&case, &mut snapshot, id, kind, &files).await?;
         }
         Command::Pair => bail!("pairing is handled before connecting"),
         Command::Dump => dump(&case).await?,
@@ -460,10 +460,10 @@ fn write_csv(directory: &Path, name: &str, log: &[u8]) -> anyhow::Result<usize> 
     Ok(records.len())
 }
 
-async fn stored_checksum(case: &Case, bud: Bud, id: u8) -> anyhow::Result<u32> {
+async fn stored_checksum(case: &Case, bud: Bud, kind: Kind, id: u8) -> anyhow::Result<u32> {
     let reply = case
         .exchange_until(
-            &sounds::stored_checksum(bud, sounds::MASKING, id),
+            &sounds::stored_checksum(bud, kind, id),
             |frame| {
                 frame.function == sounds::INTEGRITY_CHECK && frame.operator != Operator::Processing
             },
@@ -475,16 +475,16 @@ async fn stored_checksum(case: &Case, bud: Bud, id: u8) -> anyhow::Result<u32> {
     Ok(sounds::parse_checksum(&reply)?)
 }
 
-/// Overwrites masking sound `id` on each listed bud with a sound known as
-/// `new_id`, and verifies the stored copy.
-async fn replace_sound(
+/// Stores `files` on their buds as a new sound `id` of `kind`, and verifies
+/// each stored copy.
+async fn add_sound(
     case: &Case,
     snapshot: &mut Snapshot,
     id: u8,
-    new_id: u8,
-    uploads: &[(Bud, Vec<u8>)],
+    kind: Kind,
+    files: &[(Bud, Vec<u8>)],
 ) -> anyhow::Result<()> {
-    // The case drops a control-only host within seconds, and an upload takes minutes.
+    // The case drops a control-only host within seconds, and an upload takes over a minute.
     case::connect_audio()
         .await
         .context("connecting audio, which keeps the case awake during the upload")?;
@@ -497,19 +497,16 @@ async fn replace_sound(
     if !docked || !linked {
         bail!("both buds must be in the case and connected to it");
     }
-    for (bud, file) in uploads {
+    for (bud, _) in files {
         let holds = case
-            .exchange(&sounds::buds_sounds(*bud, sounds::MASKING), |_| {})
+            .exchange(&sounds::buds_sounds(*bud, kind), |_| {})
             .await?;
-        if !sounds::stored_ids(&holds).contains(&id) {
-            bail!("the {bud:?} bud holds no masking sound {id}");
+        if sounds::stored_ids(&holds).contains(&id) {
+            bail!("the {bud:?} bud already holds {kind:?} sound {id}");
         }
-        println!(
-            "{bud:?} bud: stored {:08X}, file {:08X}, {} bytes",
-            stored_checksum(case, *bud, id).await?,
-            sounds::checksum(file),
-            file.len()
-        );
+        if !sounds::has_free_slot(&holds) {
+            bail!("the {bud:?} bud has no free {kind:?} slot. Remove a sound in the phone app");
+        }
     }
     if let Some(playback) = snapshot
         .playback
@@ -517,48 +514,65 @@ async fn replace_sound(
     {
         ask(case, snapshot, &audio::stop(playback.loop_id)).await?;
     }
-    let session = case
-        .exchange(&sounds::upload_session_state(), |_| {})
-        .await?;
+
+    let channel = case
+        .open_transfer_channel(sounds::TRANSFER_PSM)
+        .await
+        .context("opening the transfer channel")?;
+    let state = sounds::upload_session_state();
+    channel.send(&state).await?;
+    let session = reply_to(&state, case, &channel, SLOW_REPLY).await?;
     if session.payload.first() == Some(&1) {
         bail!("an upload session is already open on the case. Nothing was sent");
     }
+    let open = sounds::open_upload_session();
+    channel.send(&open).await?;
+    reply_to(&open, case, &channel, SLOW_REPLY)
+        .await
+        .context("opening the upload session")?;
 
-    let sessionless = std::env::var_os("OZZZLO_NO_UPLOAD_SESSION").is_some();
-    if !sessionless {
-        case.exchange(&sounds::open_upload_session(), |_| {})
-            .await
-            .context("opening the upload session")?;
-    }
     let mut outcome = Ok(());
-    for (bud, file) in uploads {
-        outcome = upload(case, *bud, id, new_id, file).await;
+    for (bud, file) in files {
+        outcome = upload(case, &channel, *bud, id, kind, file).await;
         if outcome.is_err() {
             break;
         }
     }
     // The session is closed whatever happened, so the case is not left waiting.
-    let closed = case.exchange(&sounds::close_upload_session(), |_| {}).await;
+    let close = sounds::close_upload_session();
+    let closed = match channel.send(&close).await {
+        Ok(()) => reply_to(&close, case, &channel, SLOW_REPLY).await,
+        Err(error) => Err(error),
+    };
     outcome?;
     closed.context("closing the upload session")?;
-    println!("done");
+    println!("done. The buds drop their link to the case for a few seconds now");
     Ok(())
 }
 
-/// Sends `request` on the transfer channel if there is one, else on the control
-/// link, and waits for the frame that `settles` it on either.
-async fn transfer_exchange(
-    case: &Case,
-    channel: Option<&TransferChannel>,
+/// Waits for the frame that answers `request`, on the transfer channel or the
+/// control link.
+async fn reply_to(
     request: &Frame,
-    settles: impl Fn(&Frame) -> bool,
+    case: &Case,
+    channel: &TransferChannel,
     patience: Duration,
-    mut seen: impl FnMut(&Frame),
 ) -> Result<Frame, case::Error> {
-    let Some(channel) = channel else {
-        return case.exchange_until(request, settles, patience, seen).await;
-    };
-    channel.send(request).await?;
+    reply_on(case, channel, request.function, patience, |frame| {
+        frame.answers(request)
+    })
+    .await
+}
+
+/// Waits for the first frame that `settles` a request to `function`, on the
+/// transfer channel or the control link.
+async fn reply_on(
+    case: &Case,
+    channel: &TransferChannel,
+    function: Function,
+    patience: Duration,
+    settles: impl Fn(&Frame) -> bool,
+) -> Result<Frame, case::Error> {
     loop {
         let next = async {
             tokio::select! {
@@ -568,8 +582,7 @@ async fn transfer_exchange(
         };
         let frame = tokio::time::timeout(patience, next)
             .await
-            .map_err(|_| case::Error::NoReply(request.function))??;
-        seen(&frame);
+            .map_err(|_| case::Error::NoReply(function))??;
         if settles(&frame) {
             return match frame.refusal() {
                 Some(code) => Err(case::Error::Refused(frame.function, code)),
@@ -579,68 +592,50 @@ async fn transfer_exchange(
     }
 }
 
-async fn upload(case: &Case, bud: Bud, id: u8, new_id: u8, file: &[u8]) -> anyhow::Result<()> {
-    let channel = match std::env::var("OZZZLO_TRANSFER_PSM") {
-        Ok(psm) => {
-            let psm = psm.parse().context("OZZZLO_TRANSFER_PSM is not a number")?;
-            Some(
-                case.open_transfer_channel(psm)
-                    .await
-                    .context("opening the transfer channel")?,
-            )
-        }
-        Err(_) => None,
-    };
-    let channel = channel.as_ref();
-    let report = |frame: &Frame| {
-        if frame.function != sounds::TRANSFER {
-            println!("  <- {frame}  # {} {:?}", frame.function, frame.operator);
-        }
-    };
-    let announce = sounds::replace(id, new_id, file.len() as u32, sounds::MASKING, bud);
-    // The vendor app lists the bud's sounds inside the session, before it announces.
-    case.exchange(&sounds::buds_sounds(bud, sounds::MASKING), report)
+async fn upload(
+    case: &Case,
+    channel: &TransferChannel,
+    bud: Bud,
+    id: u8,
+    kind: Kind,
+    file: &[u8],
+) -> anyhow::Result<()> {
+    // The phone app lists the bud's sounds inside the session, before it announces.
+    case.exchange(&sounds::buds_sounds(bud, kind), |_| {})
         .await?;
     println!("{bud:?} bud: announcing {} bytes", file.len());
-    transfer_exchange(
-        case,
-        channel,
-        &announce,
-        |frame| frame.answers(&announce),
-        ERASE_PATIENCE,
-        report,
-    )
-    .await
-    .with_context(|| format!("announcing the file to the {bud:?} bud"))?;
+    let announce = sounds::add(id, file.len() as u32, kind, bud);
+    channel.send(&announce).await?;
+    reply_to(&announce, case, channel, ERASE_PATIENCE)
+        .await
+        .with_context(|| format!("announcing the file to the {bud:?} bud"))?;
 
     let chunks = file.chunks(sounds::CHUNK_BYTES);
     let total = chunks.len();
     for (sent, chunk) in chunks.enumerate() {
-        let request = sounds::transfer(bud, chunk);
-        let accepted = |frame: &Frame| {
+        channel.send_long(&sounds::transfer(bud, chunk)).await?;
+        reply_on(case, channel, sounds::TRANSFER, SLOW_REPLY, |frame| {
             frame.function == sounds::TRANSFER
                 && matches!(frame.operator, Operator::Processing | Operator::Error)
-        };
-        transfer_exchange(case, channel, &request, accepted, SLOW_REPLY, report)
-            .await
-            .with_context(|| format!("sending chunk {} of {total} to the {bud:?} bud", sent + 1))?;
-        if (sent + 1) % 100 == 0 || sent + 1 == total {
+        })
+        .await
+        .with_context(|| format!("sending chunk {} of {total} to the {bud:?} bud", sent + 1))?;
+        if (sent + 1) % 25 == 0 || sent + 1 == total {
             println!("{bud:?} bud: {} of {total} chunks", sent + 1);
         }
     }
     let end = sounds::transfer(bud, &[]);
-    transfer_exchange(
-        case,
-        channel,
-        &end,
-        |frame| frame.answers(&end),
-        ERASE_PATIENCE,
-        report,
-    )
-    .await
-    .with_context(|| format!("finishing the file on the {bud:?} bud"))?;
+    channel.send(&end).await?;
+    reply_to(&end, case, channel, ERASE_PATIENCE)
+        .await
+        .with_context(|| format!("finishing the file on the {bud:?} bud"))?;
+    let commit = sounds::commit(id, kind, bud);
+    channel.send(&commit).await?;
+    reply_to(&commit, case, channel, SLOW_REPLY)
+        .await
+        .with_context(|| format!("registering the sound on the {bud:?} bud"))?;
 
-    let stored = stored_checksum(case, bud, new_id).await?;
+    let stored = stored_checksum(case, bud, kind, id).await?;
     let wanted = sounds::checksum(file);
     if stored != wanted {
         bail!("the {bud:?} bud stored {stored:08X}, but the file is {wanted:08X}");

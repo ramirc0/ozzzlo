@@ -1,21 +1,31 @@
-//! Replacing and verifying the sound files stored on the buds.
+//! Adding and verifying the sound files stored on the buds.
 //!
-//! A sound is one LC3 file per bud. The frames here follow the vendor's
-//! Android app. Only replacing an existing sound is built.
+//! A sound is one LC3 file per bud. The frames here match a capture of the
+//! phone app adding an alarm sound.
 
 use super::{Frame, Function, Malformed, Operator};
 
 pub const BUDS_SOUNDS: Function = Function { block: 5, id: 11 };
+pub const ADD: Function = Function { block: 5, id: 29 };
 pub const TRANSFER: Function = Function { block: 5, id: 30 };
+pub const COMMIT: Function = Function { block: 5, id: 31 };
 pub const INTEGRITY_CHECK: Function = Function { block: 5, id: 34 };
-pub const REPLACE: Function = Function { block: 5, id: 36 };
 pub const UPLOAD_SESSION: Function = Function { block: 5, id: 37 };
 
-/// The audio bytes one transfer frame carries. A frame and its envelope must
-/// fit one write at the usual MTU.
-pub const CHUNK_BYTES: usize = 235;
-/// The vendor's masking sound type.
-pub const MASKING: u8 = 0;
+/// The L2CAP PSM of the channel that carries an upload.
+pub const TRANSFER_PSM: u16 = 129;
+/// The file bytes one transfer frame carries. The frame and its envelope fill
+/// the 895 bytes the case accepts per packet.
+pub const CHUNK_BYTES: usize = 888;
+
+/// Which of a bud's two sound stores a sound lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Kind {
+    /// A looping sound for sleep.
+    Masking = 0,
+    /// A sound an alarm plays.
+    Alarm = 1,
+}
 
 /// One of the two buds, as the case numbers them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,17 +111,21 @@ pub fn close_upload_session() -> Frame {
     Frame::set_get(UPLOAD_SESSION, vec![0])
 }
 
-/// A request to overwrite sound `old_id` on `bud` with a file of `size` bytes
-/// that will be known as `new_id`.
-pub fn replace(old_id: u8, new_id: u8, size: u32, kind: u8, bud: Bud) -> Frame {
-    let mut payload = vec![old_id, new_id];
+/// A request to make room on `bud` for a new sound `id` of `size` bytes.
+pub fn add(id: u8, size: u32, kind: Kind, bud: Bud) -> Frame {
+    let mut payload = vec![id];
     payload.extend(size.to_be_bytes());
-    payload.extend([kind, bud as u8]);
+    payload.extend([kind as u8, bud as u8]);
     Frame {
-        function: REPLACE,
+        function: ADD,
         operator: Operator::Start,
         payload,
     }
+}
+
+/// A request to register the transferred file on `bud` as sound `id`.
+pub fn commit(id: u8, kind: Kind, bud: Bud) -> Frame {
+    Frame::set_get(COMMIT, vec![id, kind as u8, bud as u8])
 }
 
 /// A transfer frame that carries the next bytes of the file to `bud`.
@@ -128,11 +142,11 @@ pub fn transfer(bud: Bud, bytes: &[u8]) -> Frame {
 }
 
 /// A request for the checksum `bud` computes over its stored copy of a sound.
-pub fn stored_checksum(bud: Bud, kind: u8, sound_id: u8) -> Frame {
+pub fn stored_checksum(bud: Bud, kind: Kind, sound_id: u8) -> Frame {
     Frame {
         function: INTEGRITY_CHECK,
         operator: Operator::Get,
-        payload: vec![bud as u8, kind, sound_id],
+        payload: vec![bud as u8, kind as u8, sound_id],
     }
 }
 
@@ -159,12 +173,17 @@ pub fn stored_ids(frame: &Frame) -> Vec<u8> {
 }
 
 /// A request for the sound IDs of `kind` that `bud` holds.
-pub fn buds_sounds(bud: Bud, kind: u8) -> Frame {
+pub fn buds_sounds(bud: Bud, kind: Kind) -> Frame {
     Frame {
         function: BUDS_SOUNDS,
         operator: Operator::Get,
-        payload: vec![bud as u8, kind],
+        payload: vec![bud as u8, kind as u8],
     }
+}
+
+/// Whether a `SoundInfo` reply shows a slot the bud could store a new sound in.
+pub fn has_free_slot(frame: &Frame) -> bool {
+    frame.payload.contains(&0xff)
 }
 
 #[cfg(test)]
@@ -215,33 +234,45 @@ mod tests {
     }
 
     #[test]
-    fn requests_match_the_vendor_frames() {
+    fn requests_match_the_captured_frames() {
         assert_eq!(upload_session_state().to_string(), "05 25 01 00");
         assert_eq!(open_upload_session().to_string(), "05 25 02 01 01");
         assert_eq!(close_upload_session().to_string(), "05 25 02 01 00");
         assert_eq!(
-            replace(65, 65, 353_696, MASKING, Bud::Left).to_string(),
-            "05 24 05 08 41 41 00 05 65 a0 00 01"
-        );
-        assert_eq!(
-            transfer(Bud::Right, &[0xaa, 0xbb]).to_string(),
-            "05 1e 05 03 02 aa bb"
+            add(11, 109_818, Kind::Alarm, Bud::Left).to_string(),
+            "05 1d 05 07 0b 00 01 ac fa 01 01"
         );
         assert_eq!(transfer(Bud::Left, &[]).to_string(), "05 1e 05 01 01");
         assert_eq!(
-            stored_checksum(Bud::Left, MASKING, 18).to_string(),
-            "05 22 01 03 01 00 12"
+            commit(11, Kind::Alarm, Bud::Right).to_string(),
+            "05 1f 02 03 0b 01 02"
         );
         assert_eq!(
-            buds_sounds(Bud::Right, MASKING).to_string(),
-            "05 0b 01 02 02 00"
+            stored_checksum(Bud::Left, Kind::Alarm, 11).to_string(),
+            "05 22 01 03 01 01 0b"
+        );
+        assert_eq!(
+            buds_sounds(Bud::Right, Kind::Alarm).to_string(),
+            "05 0b 01 02 02 01"
         );
     }
 
     #[test]
-    fn a_full_chunk_fits_one_frame() {
-        let frame = transfer(Bud::Left, &[0u8; CHUNK_BYTES]);
-        assert!(frame.encode().is_ok());
+    fn a_full_chunk_matches_the_captured_header_and_fills_the_channel() {
+        let bytes = transfer(Bud::Left, &[0u8; CHUNK_BYTES])
+            .encode_long()
+            .unwrap();
+        assert_eq!(bytes[..6], [0x85, 0x1e, 0x05, 0x03, 0x79, 0x01]);
+        // The case grants 895 bytes per packet, and the envelope takes one.
+        assert_eq!(bytes.len(), 894);
+    }
+
+    #[test]
+    fn a_bud_with_every_slot_taken_has_no_free_slot() {
+        let with_room: Frame = "05 0b 03 03 08 09 ff".parse().unwrap();
+        let full: Frame = "05 0b 03 03 08 0b 09".parse().unwrap();
+        assert!(has_free_slot(&with_room));
+        assert!(!has_free_slot(&full));
     }
 
     #[test]

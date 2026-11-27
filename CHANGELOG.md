@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
-- `sound check` command that prints the checksum each bud computes over a stored sound.
-- Experimental `sound replace` command. The case refuses the request, so it does not work yet.
+- `sound check` command that prints the checksum each bud computes over a stored masking or alarm sound.
+- Experimental `sound add` command that stores a new sound on both buds. It follows the sequence the phone app uses and has not run against hardware yet.
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
 - `A` key in the terminal interface that connects the computer to the buds for audio, which keeps the control link up.
 - Pairing guide in `docs/pairing.md`.
