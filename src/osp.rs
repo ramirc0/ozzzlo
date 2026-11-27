@@ -123,6 +123,7 @@ const FUNCTION_NAMES: &[(u8, u8, &str)] = &[
     (2, 15, "CaseLidState"),
     (2, 16, "DeviceRssi"),
     (2, 18, "DeviceUsageStatistics"),
+    (3, 12, "UpdateProgress"),
     (4, 0, "BlockVersion"),
     (4, 1, "Connect"),
     (4, 2, "Disconnect"),
