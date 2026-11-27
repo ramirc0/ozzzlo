@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A command no longer waits 20 seconds when the phone app holds the case. It gives up after 8 seconds, says the phone app may be connected, and cancels the pending connection.
 - The terminal interface misread the case's disconnect reason, showing "reason 172" where the case had gone idle.
 - Connecting no longer hangs for two minutes when BlueZ reports the LE link up but has lost the case's services.
 

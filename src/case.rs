@@ -20,7 +20,8 @@ const FIRMWARE_UPDATE_CHARACTERISTIC: Uuid =
     Uuid::from_u128(0x1732c346_048b_11ee_be56_0242ac120002);
 
 const LE_BEARER: &str = "org.bluez.Bearer.LE1";
-const LE_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+// A reachable case links in about two seconds.
+const LE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DISCOVERY_ATTEMPTS: u32 = 20;
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
 const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
@@ -66,7 +67,8 @@ impl fmt::Display for Error {
             Self::LinkBusy => write!(f, "another program is already talking to the case"),
             Self::Disconnected => write!(
                 f,
-                "the case is not reachable over Bluetooth LE. Open its lid"
+                "the case is not reachable over Bluetooth LE. \
+                 It may be out of range or asleep, or the phone app may be connected to it"
             ),
             Self::NoReply(function) => write!(f, "the case did not answer {function}"),
             Self::Refused(function, code) => write!(f, "the case refused {function}: {code}"),
@@ -327,6 +329,7 @@ async fn ensure_le_link(device: &Device, object_path: String, linked: bool) -> R
 
 async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error> {
     log::info!("connecting to {} over LE", device.address());
+    let cancel_path = object_path.clone();
     let connected = tokio::task::spawn_blocking(move || le_call(&object_path, "Connect")).await;
     match connected {
         Ok(Ok(())) => {}
@@ -340,6 +343,11 @@ async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error>
         }
         failed => {
             log::info!("LE connect failed: {failed:?}");
+            // BlueZ keeps trying after the call times out, and a late success
+            // would take the case away from the phone app unasked.
+            let cancelled =
+                tokio::task::spawn_blocking(move || le_call(&cancel_path, "Disconnect")).await;
+            log::debug!("cancelled the pending LE connect: {cancelled:?}");
             return Err(Error::Disconnected);
         }
     }
