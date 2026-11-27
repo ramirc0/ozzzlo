@@ -328,12 +328,20 @@ async fn ensure_le_link(device: &Device, object_path: String, linked: bool) -> R
 async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error> {
     log::info!("connecting to {} over LE", device.address());
     let connected = tokio::task::spawn_blocking(move || le_call(&object_path, "Connect")).await;
-    if !matches!(connected, Ok(Ok(()))) {
-        log::warn!("LE-only connect failed ({connected:?}), using Device1.Connect");
-        device.connect().await.map_err(|error| {
-            log::warn!("connect failed: {error}");
-            Error::Disconnected
-        })?;
+    match connected {
+        Ok(Ok(())) => {}
+        // Only a BlueZ without LE bearers needs the call that may also raise audio.
+        Ok(Err(error)) if error.name().is_some_and(|name| name.contains("Unknown")) => {
+            log::info!("BlueZ has no LE bearer ({error}), using Device1.Connect");
+            device.connect().await.map_err(|error| {
+                log::warn!("connect failed: {error}");
+                Error::Disconnected
+            })?;
+        }
+        failed => {
+            log::info!("LE connect failed: {failed:?}");
+            return Err(Error::Disconnected);
+        }
     }
     Ok(())
 }
