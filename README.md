@@ -70,7 +70,8 @@ ozzzlo alarm --help
 ```
 
 * The case answers only while its lid is open or the buds are in use.
-* One program can hold the control link at a time. Close the interface before running a command, and close the phone app if commands fail.
+* One ozzzlo can hold the control link at a time. Close the interface before running a command.
+* The case serves one control host at a time. When ozzzlo connects, the phone app loses control until it reconnects.
 * ozzzlo keeps a log at `~/.local/state/ozzzlo/ozzzlo.log`. It records every frame exchanged with the case, plus the case's Bluetooth address and serial number. `-v` echoes it to the terminal.
 * After a firmware update, `ozzzlo dump` prints every readable function as raw hex. A diff of two dumps shows what the update changed. Decode failures appear in the log as `WARN` lines that name the function.
 * `RUST_BACKTRACE=1` adds a stack trace to errors in the log. A crash always logs one.

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The terminal interface misread the case's disconnect reason, showing "reason 172" where the case had gone idle.
 - Connecting no longer hangs for two minutes when BlueZ reports the LE link up but has lost the case's services.
 
 ### Added

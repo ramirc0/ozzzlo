@@ -1001,6 +1001,21 @@ async fn send_all(
     Ok(())
 }
 
+/// Words for the case's announcement that it is about to drop a host.
+///
+/// The payload is a reason code, then the Bluetooth address of that host.
+fn disconnect_notice(frame: &Frame) -> Option<String> {
+    if frame.function != DISCONNECT || frame.operator != Operator::Processing {
+        return None;
+    }
+    Some(match frame.payload.first() {
+        Some(34) => "the case went idle".to_string(),
+        Some(35) => "Bluetooth mode changed".to_string(),
+        Some(code) => format!("the case is disconnecting (reason {code})"),
+        None => "the case is disconnecting".to_string(),
+    })
+}
+
 /// Reacts to a frame the case sent unprompted.
 async fn on_push(
     case: &Case,
@@ -1008,13 +1023,7 @@ async fn on_push(
     app: &mut App,
     frame: &Frame,
 ) -> Result<(), case::Error> {
-    if frame.function == DISCONNECT && frame.operator == Operator::Processing {
-        let reason = match frame.payload.last() {
-            Some(34) => "the case went idle".to_string(),
-            Some(35) => "Bluetooth mode changed".to_string(),
-            Some(code) => format!("the case is disconnecting (reason {code})"),
-            None => "the case is disconnecting".to_string(),
-        };
+    if let Some(reason) = disconnect_notice(frame) {
         log::info!("{reason}");
         app.notice = Some(reason);
     }
@@ -1271,6 +1280,23 @@ mod tests {
         assert_eq!(app.log_scroll, usize::MAX);
         press(&mut app, &snapshot, KeyCode::Char('G'));
         assert_eq!(app.log_scroll, 0);
+    }
+
+    #[test]
+    fn the_disconnect_reason_is_the_first_payload_byte() {
+        // Captured after the lid closed: reason 34, then the host's address.
+        let idle: Frame = "04 02 07 07 22 66 55 44 33 22 11".parse().unwrap();
+        assert_eq!(
+            disconnect_notice(&idle).as_deref(),
+            Some("the case went idle")
+        );
+        let other: Frame = "04 02 07 01 06".parse().unwrap();
+        assert_eq!(
+            disconnect_notice(&other).as_deref(),
+            Some("the case is disconnecting (reason 6)")
+        );
+        let unrelated: Frame = "02 0f 03 01 00".parse().unwrap();
+        assert_eq!(disconnect_notice(&unrelated), None);
     }
 
     #[test]
