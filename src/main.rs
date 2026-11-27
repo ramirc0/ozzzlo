@@ -26,6 +26,12 @@ enum Command {
     Status,
     /// Print the charge of the case and each bud.
     Battery,
+    /// Show the sound volume, or change it to LEVEL.
+    Volume {
+        /// The new level, from 0 to 100.
+        #[arg(value_parser = clap::value_parser!(u8).range(0..=100))]
+        level: Option<u8>,
+    },
     /// List the sounds stored on the buds.
     Sounds,
     /// Show the alarms set on the case.
@@ -64,11 +70,25 @@ async fn run(command: Command) -> anyhow::Result<()> {
             })
             .await
             .context("reading the battery level")?;
-            let level = snapshot.battery.context("the battery reply was malformed")?;
+            let level = snapshot
+                .battery
+                .context("the battery reply was malformed")?;
             println!(
                 "case {}%  left {}%  right {}%",
                 level.case, level.left, level.right
             );
+        }
+        Command::Volume { level } => {
+            let request = match level {
+                Some(level) => audio::change_volume_to(level),
+                None => Frame::get(audio::SOUND_LOOP_VOLUME),
+            };
+            let mut snapshot = Snapshot::default();
+            case.exchange(&request, |frame| snapshot.apply(frame))
+                .await
+                .context("talking to the volume control")?;
+            let volume = snapshot.volume.context("the volume reply was malformed")?;
+            println!("volume {volume}");
         }
         Command::Sounds => {
             let snapshot = survey(&case).await?;
@@ -157,7 +177,10 @@ async fn dump(case: &Case) -> anyhow::Result<()> {
 }
 
 async fn print_exchange(case: &Case, request: &Frame) -> Result<(), case::Error> {
-    println!("-> {request}  # {} {:?}", request.function, request.operator);
+    println!(
+        "-> {request}  # {} {:?}",
+        request.function, request.operator
+    );
     case.exchange(request, |frame| {
         println!("<- {frame}  # {} {:?}", frame.function, frame.operator);
     })

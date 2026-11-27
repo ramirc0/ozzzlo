@@ -177,13 +177,13 @@ impl Function {
     /// Whether sending to this function could brick the case, erase user
     /// data, or break its pairing with the buds or the host.
     pub fn is_hazardous(self) -> bool {
-        match (self.block, self.id) {
-            (3 | 17, _) => true,
-            (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) => true,
-            (5, 10 | 29 | 30 | 35 | 36 | 37) => true,
-            (13, 1) => true,
-            _ => false,
-        }
+        matches!(
+            (self.block, self.id),
+            (3 | 17, _)
+                | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21)
+                | (5, 10 | 29 | 30 | 35 | 36 | 37)
+                | (13, 1)
+        )
     }
 }
 

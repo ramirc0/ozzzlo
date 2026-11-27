@@ -79,8 +79,7 @@ pub fn file_path() -> PathBuf {
 pub fn start(verbosity: u8) -> anyhow::Result<()> {
     let path = file_path();
     let directory = path.parent().context("log path has no parent")?;
-    fs::create_dir_all(directory)
-        .with_context(|| format!("creating {}", directory.display()))?;
+    fs::create_dir_all(directory).with_context(|| format!("creating {}", directory.display()))?;
     if fs::metadata(&path).is_ok_and(|meta| meta.len() > ROTATE_ABOVE_BYTES) {
         fs::rename(&path, path.with_extension("log.old"))
             .with_context(|| format!("rotating {}", path.display()))?;

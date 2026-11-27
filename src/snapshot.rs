@@ -111,7 +111,8 @@ fn or_unknown<T: fmt::Display>(value: Option<T>) -> String {
 impl fmt::Display for Snapshot {
     /// Writes the multi-line report `ozzzlo status` prints.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let percent = |level: Option<u8>| level.map_or("?".to_string(), |level| format!("{level}%"));
+        let percent =
+            |level: Option<u8>| level.map_or("?".to_string(), |level| format!("{level}%"));
         let battery = self.battery;
         let lid = match self.lid_open {
             Some(true) => "lid open",
@@ -135,7 +136,8 @@ impl fmt::Display for Snapshot {
             Some(BudsLocation::RightOut) => "right out of case",
             None => "location unknown",
         };
-        let signal = |rssi: Option<i16>| rssi.map_or("no link".to_string(), |rssi| format!("{rssi} dBm"));
+        let signal =
+            |rssi: Option<i16>| rssi.map_or("no link".to_string(), |rssi| format!("{rssi} dBm"));
         let connection = self.buds_connection;
         writeln!(
             f,
@@ -156,7 +158,11 @@ impl fmt::Display for Snapshot {
             }
             None => "unknown".to_string(),
         };
-        writeln!(f, "Sound       {playing}, volume {}", or_unknown(self.volume))?;
+        writeln!(
+            f,
+            "Sound       {playing}, volume {}",
+            or_unknown(self.volume)
+        )?;
         let timer = match (self.sleep_timer_minutes, self.timer_seconds_left) {
             (Some(0), _) => "off".to_string(),
             (Some(minutes), Some(left)) if left > 0 => {
@@ -197,7 +203,11 @@ impl fmt::Display for Snapshot {
             )
         });
         writeln!(f, "Firmware    {}", or_unknown(firmware))?;
-        write!(f, "Serial      {}", or_unknown(self.serial_number.as_deref()))
+        write!(
+            f,
+            "Serial      {}",
+            or_unknown(self.serial_number.as_deref())
+        )
     }
 }
 
@@ -264,7 +274,9 @@ mod tests {
     fn the_report_names_the_playing_sound() {
         let report = replayed().to_string();
         assert!(report.contains("Sound       Intimate Rain, playing, volume 40"));
-        assert!(report.contains("Buds        left 91% (-16 dBm), right 91% (-28 dBm), out of case"));
+        assert!(
+            report.contains("Buds        left 91% (-16 dBm), right 91% (-28 dBm), out of case")
+        );
         assert!(report.contains("Case clock  2026-11-27 02:35:14"));
     }
 }

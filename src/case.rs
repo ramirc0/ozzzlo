@@ -123,15 +123,15 @@ impl Case {
             device.address().to_string().replace(':', "_")
         );
 
-        let bond_path = object_path.clone();
-        let bonded = tokio::task::spawn_blocking(move || le_bond(&bond_path))
-            .await
-            .unwrap_or(None);
-        if bonded == Some(false) {
-            return Err(Error::NotBonded);
-        }
-
-        if characteristic(&device, OSP_CHARACTERISTIC).await.is_none() {
+        let bearer_path = object_path.clone();
+        let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
+        let linked = match bearer {
+            Ok(Some(LeBearer { bonded: false, .. })) => return Err(Error::NotBonded),
+            Ok(Some(LeBearer { connected, .. })) => connected,
+            // BlueZ without bearer support cannot tell an LE link from an audio link.
+            _ => false,
+        };
+        if !linked {
             log::info!("connecting to {} over LE", device.address());
             let connected = tokio::task::spawn_blocking(move || le_connect(&object_path)).await;
             if !matches!(connected, Ok(Ok(()))) {
@@ -250,19 +250,28 @@ async fn characteristic(device: &Device, uuid: Uuid) -> Option<Characteristic> {
 }
 
 async fn subscription_to(characteristic: &Characteristic) -> Result<CharacteristicReader, Error> {
-    characteristic.notify_io().await.map_err(|error| match error.kind {
-        bluer::ErrorKind::NotPermitted => Error::LinkBusy,
-        _ => Error::Bluetooth(error),
-    })
+    characteristic
+        .notify_io()
+        .await
+        .map_err(|error| match error.kind {
+            bluer::ErrorKind::NotPermitted => Error::LinkBusy,
+            _ => Error::Bluetooth(error),
+        })
 }
 
-/// Whether BlueZ holds an LE bond for the device, or `None` if this BlueZ
-/// version does not expose bearers.
-fn le_bond(object_path: &str) -> Option<bool> {
+struct LeBearer {
+    bonded: bool,
+    connected: bool,
+}
+
+/// The device's LE bearer state, or `None` if this BlueZ does not expose bearers.
+fn le_bearer(object_path: &str) -> Option<LeBearer> {
     let bus = Connection::new_system().ok()?;
-    bus.with_proxy("org.bluez", object_path, Duration::from_secs(5))
-        .get(LE_BEARER, "Bonded")
-        .ok()
+    let device = bus.with_proxy("org.bluez", object_path, Duration::from_secs(5));
+    Some(LeBearer {
+        bonded: device.get(LE_BEARER, "Bonded").ok()?,
+        connected: device.get(LE_BEARER, "Connected").ok()?,
+    })
 }
 
 fn le_connect(object_path: &str) -> Result<(), dbus::Error> {

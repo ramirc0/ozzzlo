@@ -163,7 +163,9 @@ impl Alarm {
             return Err(frame.malformed(expected));
         }
         Ok(records
-            .chunks_exact(7)
+            .as_chunks::<7>()
+            .0
+            .iter()
             .map(|record| Self {
                 index: record[0],
                 hour: record[1],
@@ -256,14 +258,6 @@ pub fn sleep_timer_minutes(frame: &Frame) -> Result<u16, Malformed> {
     }
 }
 
-/// Reads a `CurrentSoundLoop` reply.
-pub fn current_loop(frame: &Frame) -> Result<u8, Malformed> {
-    match frame.payload[..] {
-        [id] => Ok(id),
-        _ => Err(frame.malformed("one loop ID byte")),
-    }
-}
-
 /// Reads a `ProductName` reply: a flag byte, then the name.
 pub fn product_name(frame: &Frame) -> Result<String, Malformed> {
     match &frame.payload[..] {
@@ -339,7 +333,6 @@ mod tests {
     #[test]
     fn simple_settings_read_their_captured_replies() {
         assert_eq!(sleep_timer_minutes(&captured("01 0d 03 02 00 00")), Ok(0));
-        assert_eq!(current_loop(&captured("01 08 03 01 12")), Ok(18));
         assert_eq!(
             AutoStart::parse(&captured("01 10 03 01 00")),
             Ok(AutoStart::Immediately)

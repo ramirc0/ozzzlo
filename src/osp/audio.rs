@@ -94,9 +94,19 @@ pub fn volume(frame: &Frame) -> Result<u8, Malformed> {
     }
 }
 
+/// A request to change the sound loop volume to `level`, from 0 to 100.
+pub fn change_volume_to(level: u8) -> Frame {
+    Frame::set_get(SOUND_LOOP_VOLUME, vec![level])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn volume_change_matches_the_vendor_frame() {
+        assert_eq!(change_volume_to(40).to_string(), "05 09 02 01 28");
+    }
 
     #[test]
     fn playback_reads_loop_and_state() {

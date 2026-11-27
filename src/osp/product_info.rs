@@ -20,11 +20,17 @@ pub struct FirmwareVersion {
 impl FirmwareVersion {
     /// Reads a `FirmwareVersion` reply: four 13-byte strings.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
-        let mut versions = frame
-            .payload
-            .chunks_exact(13)
-            .map(|chunk| String::from_utf8_lossy(chunk).trim_end_matches('\0').to_string());
-        match (versions.next(), versions.next(), versions.next(), versions.next()) {
+        let mut versions = frame.payload.as_chunks::<13>().0.iter().map(|chunk| {
+            String::from_utf8_lossy(chunk)
+                .trim_end_matches('\0')
+                .to_string()
+        });
+        match (
+            versions.next(),
+            versions.next(),
+            versions.next(),
+            versions.next(),
+        ) {
             (Some(case_bluetooth), Some(case_radio), Some(left), Some(right)) => Ok(Self {
                 case_bluetooth,
                 case_radio,
