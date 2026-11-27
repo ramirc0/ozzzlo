@@ -17,6 +17,15 @@ It can:
 * list, add, edit, toggle and delete alarms
 * run as a terminal interface that follows the case live
 
+It cannot:
+
+* upload new sounds to the buds
+* read sleep and health data
+* update firmware
+* talk to the case over USB
+* find a case the computer has never paired with
+* run on macOS or Windows
+
 The protocol was worked out by observation.
 It was tested on one Sleepbuds 2 case with firmware 02.11.2606025. Other firmware and the first-generation Sleepbuds are untested.
 
