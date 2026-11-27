@@ -20,6 +20,7 @@ const FIRMWARE_UPDATE_CHARACTERISTIC: Uuid =
     Uuid::from_u128(0x1732c346_048b_11ee_be56_0242ac120002);
 
 const LE_BEARER: &str = "org.bluez.Bearer.LE1";
+const AUDIO_BEARER: &str = "org.bluez.Bearer.BREDR1";
 // A reachable case links in about two seconds.
 const LE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DISCOVERY_ATTEMPTS: u32 = 20;
@@ -233,6 +234,45 @@ impl Case {
     }
 }
 
+/// Connects this computer to the buds for audio.
+///
+/// The case keeps a control link up only for a host that also holds an audio
+/// link. Connecting audio here takes it from any other device that had it.
+///
+/// # Errors
+///
+/// Fails with `NoCase` when BlueZ knows no case, and with `Disconnected` when
+/// the audio link cannot be brought up.
+pub async fn connect_audio() -> Result<(), Error> {
+    let session = Session::new().await?;
+    let (device, object_path) = known_case(&session).await?;
+    log::info!("connecting audio to {}", device.address());
+    let connected =
+        tokio::task::spawn_blocking(move || bearer_call(&object_path, AUDIO_BEARER, "Connect"))
+            .await;
+    match connected {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error))
+            if error
+                .name()
+                .is_some_and(|name| name.contains("AlreadyConnected")) =>
+        {
+            Ok(())
+        }
+        // A BlueZ without bearers connects every profile at once.
+        Ok(Err(error)) if error.name().is_some_and(|name| name.contains("Unknown")) => {
+            device.connect().await.map_err(|error| {
+                log::warn!("audio connect failed: {error}");
+                Error::Disconnected
+            })
+        }
+        failed => {
+            log::warn!("audio connect failed: {failed:?}");
+            Err(Error::Disconnected)
+        }
+    }
+}
+
 /// Bonds this host with the case over LE, which the case allows only in pairing mode.
 ///
 /// Calls `on_progress` with what the user should know or do each time the
@@ -369,7 +409,8 @@ async fn ensure_le_link(device: &Device, object_path: String, linked: bool) -> R
     if linked && !device.is_services_resolved().await? {
         log::info!("BlueZ lost the case's services, cycling the LE link");
         let path = object_path.clone();
-        let dropped = tokio::task::spawn_blocking(move || le_call(&path, "Disconnect")).await;
+        let dropped =
+            tokio::task::spawn_blocking(move || bearer_call(&path, LE_BEARER, "Disconnect")).await;
         log::debug!("LE disconnect: {dropped:?}");
         return link_over_le(device, object_path).await;
     }
@@ -382,7 +423,8 @@ async fn ensure_le_link(device: &Device, object_path: String, linked: bool) -> R
 async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error> {
     log::info!("connecting to {} over LE", device.address());
     let cancel_path = object_path.clone();
-    let connected = tokio::task::spawn_blocking(move || le_call(&object_path, "Connect")).await;
+    let connected =
+        tokio::task::spawn_blocking(move || bearer_call(&object_path, LE_BEARER, "Connect")).await;
     match connected {
         Ok(Ok(())) => {}
         // Only a BlueZ without LE bearers needs the call that may also raise audio.
@@ -397,8 +439,10 @@ async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error>
             log::info!("LE connect failed: {failed:?}");
             // BlueZ keeps trying after the call times out, and a late success
             // would take the case away from the phone app unasked.
-            let cancelled =
-                tokio::task::spawn_blocking(move || le_call(&cancel_path, "Disconnect")).await;
+            let cancelled = tokio::task::spawn_blocking(move || {
+                bearer_call(&cancel_path, LE_BEARER, "Disconnect")
+            })
+            .await;
             log::debug!("cancelled the pending LE connect: {cancelled:?}");
             return Err(Error::Disconnected);
         }
@@ -455,10 +499,10 @@ fn le_bearer(object_path: &str) -> Option<LeBearer> {
     })
 }
 
-fn le_call(object_path: &str, method: &str) -> Result<(), dbus::Error> {
+fn bearer_call(object_path: &str, bearer: &str, method: &str) -> Result<(), dbus::Error> {
     let bus = Connection::new_system()?;
     bus.with_proxy("org.bluez", object_path, LE_CONNECT_TIMEOUT)
-        .method_call(LE_BEARER, method, ())
+        .method_call(bearer, method, ())
 }
 
 #[cfg(test)]

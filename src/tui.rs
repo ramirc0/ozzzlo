@@ -32,8 +32,7 @@ const LONGEST_RETRY: Duration = Duration::from_secs(30);
 const BATTERY_PERIOD: Duration = Duration::from_secs(300);
 const DISCONNECT: Function = Function { block: 4, id: 2 };
 // The case drops a control-only host after a few seconds. An audio link keeps it awake.
-const IDLE_NOTICE: &str =
-    "the case went idle. It stays awake only with an audio connection. c reconnects";
+const IDLE_NOTICE: &str = "the case went idle. It stays up only with an audio link. A connects one";
 const AUTO_START_CHOICES: [AutoStart; 8] = [
     AutoStart::Immediately,
     AutoStart::Off,
@@ -73,7 +72,7 @@ const TABS: [(Tab, &str, &str); 5] = [
     (
         Tab::Device,
         "Device",
-        "r refresh · c connect · 1-5 tab · ? help · q quit",
+        "r refresh · c connect · A audio · 1-5 tab · ? help · q quit",
     ),
     (
         Tab::Log,
@@ -82,7 +81,7 @@ const TABS: [(Tab, &str, &str); 5] = [
     ),
 ];
 
-const HELP: [&str; 13] = [
+const HELP: [&str; 14] = [
     "1 to 5      switch tab (tab and shift-tab also work)",
     "j k         move down and up (arrow keys also work)",
     "space       play or pause the current sound",
@@ -92,6 +91,7 @@ const HELP: [&str; 13] = [
     "h l         change the selected setting",
     "r           ask the case for everything again",
     "c           connect now",
+    "A           connect this computer to the buds for audio",
     "q           quit",
     "",
     "In the alarm dialog: tab moves between fields, h and l change",
@@ -176,6 +176,8 @@ pub enum Action {
     /// Send these requests in order, each after the previous one is answered.
     Send(Vec<Frame>),
     Reconnect,
+    /// Connect this computer to the buds for audio, then reconnect control.
+    ConnectAudio,
     Quit,
 }
 
@@ -220,6 +222,7 @@ pub fn on_key(app: &mut App, snapshot: &Snapshot, key: KeyEvent) -> Action {
         KeyCode::Char('q') => return Action::Quit,
         KeyCode::Char('c') if control => return Action::Quit,
         KeyCode::Char('c') => return Action::Reconnect,
+        KeyCode::Char('A') => return Action::ConnectAudio,
         KeyCode::Char('?') => app.showing_help = true,
         KeyCode::Char('r') => return Action::Send(Snapshot::survey().to_vec()),
         KeyCode::Char('1') => app.tab = Tab::Sounds,
@@ -909,6 +912,11 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
                         app.link = Link::Connecting;
                         Phase::Connecting(Box::pin(Case::connect()))
                     }
+                    Action::ConnectAudio => {
+                        connect_audio(&mut app, terminal, &snapshot).await?;
+                        app.link = Link::Connecting;
+                        Phase::Connecting(Box::pin(Case::connect()))
+                    }
                     _ => Phase::Waiting(until),
                 },
             },
@@ -932,6 +940,10 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
                 },
                 event = events.recv() => match action_for(&mut app, &snapshot, event) {
                     Action::Quit => return Ok(()),
+                    Action::ConnectAudio => {
+                        connect_audio(&mut app, terminal, &snapshot).await?;
+                        Phase::Connecting(attempt)
+                    }
                     _ => Phase::Connecting(attempt),
                 },
             },
@@ -949,6 +961,10 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
                         Action::Send(requests) => {
                             app.notice = None;
                             send_all(&case, &mut snapshot, &mut app, requests).await
+                        }
+                        Action::ConnectAudio => {
+                            connect_audio(&mut app, terminal, &snapshot).await?;
+                            Ok(())
                         }
                         _ => Ok(()),
                     },
@@ -975,6 +991,21 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
             }
         };
     }
+}
+
+/// Brings up the audio link and reports the outcome in the notice line.
+async fn connect_audio(
+    app: &mut App,
+    terminal: &mut DefaultTerminal,
+    snapshot: &Snapshot,
+) -> anyhow::Result<()> {
+    app.notice = Some("connecting audio to this computer".to_string());
+    terminal.draw(|canvas| draw(canvas, app, snapshot))?;
+    app.notice = Some(match case::connect_audio().await {
+        Ok(()) => "audio is connected to this computer".to_string(),
+        Err(error) => format!("audio did not connect: {error}"),
+    });
+    Ok(())
 }
 
 fn dropped(app: &mut App, error: &case::Error, wait: Duration) -> Phase {
@@ -1216,6 +1247,10 @@ mod tests {
         assert_eq!(
             press(&mut app, &snapshot, KeyCode::Char('c')),
             Action::Reconnect
+        );
+        assert_eq!(
+            press(&mut app, &snapshot, KeyCode::Char('A')),
+            Action::ConnectAudio
         );
         assert_eq!(press(&mut app, &snapshot, KeyCode::Char('q')), Action::Quit);
     }

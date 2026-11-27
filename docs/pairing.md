@@ -43,6 +43,7 @@ The case drops a host that holds only the control link. A few seconds after ozzz
 In the terminal interface this shows as the link dropping and returning every half minute.
 
 Connect the computer to the buds for audio and the control link stays up.
+In the terminal interface, `A` does this. It takes the audio from any other device that had it.
 Single commands such as `ozzzlo volume 35` finish before the case goes idle, so they work either way.
 
 ## When it goes wrong
@@ -54,7 +55,7 @@ Single commands such as `ozzzlo volume 35` finish before the case goes idle, so 
 | `the case did not pair in time` | Two minutes passed without the case in pairing mode and in reach. | Hold the button and run `ozzzlo pair` again. |
 | `the case is not reachable over Bluetooth LE` | The phone app holds the control link, or the case is asleep or out of range. | Close the phone app. Open the lid. Try again. |
 | `another program is already talking to the case` | Another ozzzlo is running, often the terminal interface. | Quit it first. |
-| `the case went idle` in the terminal interface | No audio connection. | Connect audio, then press `c`. |
+| `the case went idle` in the terminal interface | No audio connection. | Press `A` to connect audio. |
 
 ## Things to know
 
