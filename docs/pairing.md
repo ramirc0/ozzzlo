@@ -44,6 +44,9 @@ In the terminal interface this shows as the link dropping and returning every ha
 
 Connect the computer to the buds for audio and the control link stays up.
 In the terminal interface, `A` does this. It takes the audio from any other device that had it.
+
+To avoid pressing `A` each time, mark the case as trusted in your Bluetooth settings. The computer then reconnects audio by itself when the buds wake, and the control link holds.
+Removing and re-pairing the case clears the trusted mark.
 Single commands such as `ozzzlo volume 35` finish before the case goes idle, so they work either way.
 
 ## When it goes wrong
