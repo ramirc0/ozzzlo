@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
 - Alarm sounds in the Sounds tab, under the soundscapes. Enter plays the selected one in the buds as a preview and `s` stops it.
 - A red popup in the terminal interface while an alarm rings. `s` stops the alarm.
+- Digits type an exact hour, minute or volume in the alarm dialog.
 - `A` key in the terminal interface that connects the computer to the buds for audio, which keeps the control link up.
 - Pairing guide in `docs/pairing.md`.
 

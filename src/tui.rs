@@ -86,7 +86,7 @@ const TABS: [(Tab, &str, &str); 5] = [
 const ALARM_SOUND_HINTS: &str =
     "j/k move · enter preview · s stop · +/- vol · 1-5 tab · ? help · q quit";
 
-const HELP: [&str; 15] = [
+const HELP: [&str; 16] = [
     "1 to 5      switch tab (tab and shift-tab also work)",
     "j k         move down and up (arrow keys also work)",
     "space       play or pause the current sound",
@@ -101,7 +101,8 @@ const HELP: [&str; 15] = [
     "q           quit",
     "",
     "In the alarm dialog: tab moves between fields, h and l change",
-    "a value, space toggles a day, enter saves, esc cancels.",
+    "a value, digits type a time or volume, space toggles a day,",
+    "enter saves, esc cancels.",
 ];
 
 /// Whether the case is reachable.
@@ -409,6 +410,13 @@ fn changed_setting(row: usize, delta: isize, snapshot: &Snapshot) -> Action {
     Action::Send(vec![request])
 }
 
+/// A two-digit value after `digit` is typed at its right end. A result above
+/// `largest` starts over from the digit alone.
+fn typed(value: u8, digit: u8, largest: u8) -> u8 {
+    let shifted = value % 10 * 10 + digit;
+    if shifted > largest { digit } else { shifted }
+}
+
 fn on_dialog_key(app: &mut App, snapshot: &Snapshot, code: KeyCode) -> Action {
     let Some(dialog) = app.dialog.as_mut() else {
         return Action::Stay;
@@ -427,6 +435,15 @@ fn on_dialog_key(app: &mut App, snapshot: &Snapshot, code: KeyCode) -> Action {
         }
         KeyCode::BackTab | KeyCode::Up | KeyCode::Char('k') => {
             dialog.field = cycled(dialog.field, -1, FIELDS.len());
+        }
+        KeyCode::Char(digit @ '0'..='9') => {
+            let digit = digit as u8 - b'0';
+            match field {
+                Field::Hour => alarm.hour = typed(alarm.hour, digit, 23),
+                Field::Minute => alarm.minute = typed(alarm.minute, digit, 59),
+                Field::Volume => alarm.volume = typed(alarm.volume, digit, 100),
+                _ => {}
+            }
         }
         KeyCode::Char(' ') if field == Field::Days => alarm.days.0 ^= 1 << dialog.day,
         KeyCode::Char(' ') if field == Field::Enabled => alarm.enabled = !alarm.enabled,
@@ -919,7 +936,7 @@ fn draw_dialog(canvas: &mut Canvas, area: Rect, dialog: &AlarmDialog, snapshot: 
             ),
         ]),
         Line::raw(""),
-        key_hints("tab next · h/l change · space toggle"),
+        key_hints("tab next · h/l change · 0-9 type · space toggle"),
         key_hints("enter save · esc cancel"),
     ];
     let title = if dialog.is_new {
@@ -1381,6 +1398,21 @@ mod tests {
         // Slot 1, 08:05, enabled, volume 60, every day but Monday, sound 8.
         assert_eq!(requests[1], "01 06 02 07 01 08 05 01 3c 7d 08");
         assert_eq!(app.dialog, None);
+    }
+
+    #[test]
+    fn digits_type_an_exact_time_into_the_dialog() {
+        let snapshot = replayed();
+        let mut app = App::default();
+        press(&mut app, &snapshot, KeyCode::Char('2'));
+        press(&mut app, &snapshot, KeyCode::Char('a'));
+        press(&mut app, &snapshot, KeyCode::Char('1'));
+        press(&mut app, &snapshot, KeyCode::Char('5'));
+        press(&mut app, &snapshot, KeyCode::Tab);
+        press(&mut app, &snapshot, KeyCode::Char('4'));
+        press(&mut app, &snapshot, KeyCode::Char('7'));
+        let requests = sent(press(&mut app, &snapshot, KeyCode::Enter));
+        assert_eq!(requests[1], "01 06 02 07 01 0f 2f 01 3c 7f 08");
     }
 
     #[test]
