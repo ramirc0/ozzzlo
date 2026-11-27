@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Key hints in the terminal interface were unreadable on color schemes where dark gray matches the background. Keys are now bold cyan, and the rest uses the terminal's own foreground.
+
 ## [0.1.0] - 2026-11-27
 
 ### Added

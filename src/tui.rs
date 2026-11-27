@@ -415,8 +415,29 @@ fn selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
 
+/// Dimmed text in the terminal's own foreground. A fixed dark gray vanishes
+/// on some color schemes.
 fn dim() -> Style {
-    Style::new().fg(Color::DarkGray)
+    Style::new().add_modifier(Modifier::DIM)
+}
+
+/// Styles hints such as `j/k move · q quit`: keys stand out, actions stay quiet.
+fn key_hints(hints: &'static str) -> Line<'static> {
+    let key = Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let mut spans = vec![Span::raw(" ")];
+    for (position, hint) in hints.split(" · ").enumerate() {
+        if position > 0 {
+            spans.push(Span::styled(" · ", dim()));
+        }
+        let (keys, action) = hint.split_once(' ').unwrap_or((hint, ""));
+        spans.push(Span::styled(keys, key));
+        spans.push(Span::styled(
+            format!(" {action}"),
+            Style::new().fg(Color::Gray),
+        ));
+    }
+    spans.push(Span::raw(" "));
+    Line::from(spans)
 }
 
 /// Paints the whole interface.
@@ -441,10 +462,7 @@ pub fn draw(canvas: &mut Canvas, app: &App, snapshot: &Snapshot) {
     let frame = Block::bordered()
         .title_top(" ozzzlo ")
         .title_top(Line::from(vec![Span::raw(" "), link, Span::raw(" ")]).right_aligned())
-        .title_bottom(Line::styled(
-            format!(" {} ", hints.map_or("", |(_, _, hints)| hints)),
-            dim(),
-        ));
+        .title_bottom(key_hints(hints.map_or("", |(_, _, hints)| hints)));
     let inside = frame.inner(area);
     canvas.render_widget(frame, area);
     let [header, tabs, body, notice] = Layout::vertical([
@@ -779,8 +797,8 @@ fn draw_dialog(canvas: &mut Canvas, area: Rect, dialog: &AlarmDialog, snapshot: 
             ),
         ]),
         Line::raw(""),
-        Line::styled("tab next · h/l change · space toggle", dim()),
-        Line::styled("enter save · esc cancel", dim()),
+        key_hints("tab next · h/l change · space toggle"),
+        key_hints("enter save · esc cancel"),
     ];
     let title = if dialog.is_new {
         " New alarm "
