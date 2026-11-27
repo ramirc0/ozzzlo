@@ -5,7 +5,9 @@ use std::fmt;
 use crate::osp::audio::{self, NowPlaying, PlayState, Playback};
 use crate::osp::product_info::{self, FirmwareVersion};
 use crate::osp::settings::{self, Alarm, AutoStart, BluetoothMode, CaseClock, Sound};
-use crate::osp::status::{self, BatteryLevel, BudsConnection, BudsLocation};
+use crate::osp::status::{
+    self, AlarmPhase, AlarmState, BatteryLevel, BudsConnection, BudsLocation,
+};
 use crate::osp::{Frame, Malformed, Operator};
 
 const ALARM_SLOTS: u8 = 30;
@@ -18,7 +20,10 @@ pub struct Snapshot {
     pub lid_open: Option<bool>,
     pub buds_location: Option<BudsLocation>,
     pub buds_connection: Option<BudsConnection>,
+    pub alarm_state: Option<AlarmState>,
     pub playback: Option<Playback>,
+    /// The alarm sound playing as a preview.
+    pub previewing_alarm: Option<u8>,
     pub timer_seconds_left: Option<u16>,
     pub volume: Option<u8>,
     pub sleep_timer_minutes: Option<u16>,
@@ -38,9 +43,23 @@ pub struct Snapshot {
 impl Snapshot {
     /// Folds a frame from the case into the snapshot.
     ///
-    /// Only `Status` frames carry state. A payload that does not fit its
-    /// known layout is logged and leaves the snapshot unchanged.
+    /// Only `Status` frames carry state, except for an alarm preview, which
+    /// reports its start as `Processing` and its end as `Result`. A payload
+    /// that does not fit its known layout is logged and leaves the snapshot
+    /// unchanged.
     pub fn apply(&mut self, frame: &Frame) {
+        match (frame.function, frame.operator, frame.payload.as_slice()) {
+            // A stop request is acknowledged with `ff`, which starts nothing.
+            (audio::ALARM_PREVIEW, Operator::Processing, &[id]) if id != 0xff => {
+                self.previewing_alarm = Some(id);
+            }
+            (audio::ALARM_PREVIEW, Operator::Result, &[id])
+                if self.previewing_alarm == Some(id) =>
+            {
+                self.previewing_alarm = None;
+            }
+            _ => {}
+        }
         if frame.operator != Operator::Status {
             return;
         }
@@ -58,6 +77,7 @@ impl Snapshot {
             status::BUDS_CONNECTION_STATE => {
                 self.buds_connection = Some(BudsConnection::parse(frame)?);
             }
+            status::CURRENT_ALARM_STATE => self.alarm_state = Some(AlarmState::parse(frame)?),
             audio::PLAYING_LOOP => self.playback = Some(Playback::parse(frame)?),
             audio::NOW_PLAYING => {
                 let now = NowPlaying::parse(frame)?;
@@ -110,6 +130,13 @@ impl Snapshot {
         }
         requests.push(audio::play(loop_id));
         requests
+    }
+
+    /// The slot of the alarm that is sounding now.
+    pub fn sounding_alarm(&self) -> Option<u8> {
+        self.alarm_state
+            .filter(|state| state.phase == AlarmPhase::Sounding)
+            .map(|state| state.index)
     }
 
     /// The lowest alarm slot not in use.
@@ -291,6 +318,20 @@ mod tests {
                 "05 07 02 03 06 01 00"
             ]
         );
+    }
+
+    #[test]
+    fn an_alarm_preview_is_followed_from_start_to_end() {
+        let mut snapshot = Snapshot::default();
+        snapshot.apply(&"05 08 07 01 32".parse().unwrap());
+        assert_eq!(snapshot.previewing_alarm, Some(50));
+        // The preview this one cut short reports its end afterwards.
+        snapshot.apply(&"05 08 06 01 08".parse().unwrap());
+        assert_eq!(snapshot.previewing_alarm, Some(50));
+        snapshot.apply(&"05 08 07 01 ff".parse().unwrap());
+        assert_eq!(snapshot.previewing_alarm, Some(50));
+        snapshot.apply(&"05 08 06 01 32".parse().unwrap());
+        assert_eq!(snapshot.previewing_alarm, None);
     }
 
     #[test]

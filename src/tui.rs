@@ -24,6 +24,8 @@ use crate::snapshot::Snapshot;
 const MIN_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 24;
 const VOLUME_STEP: u8 = 5;
+// Used for an alarm sound when the case has not reported its volume yet.
+const PREVIEW_VOLUME: u8 = 40;
 const LOG_PAGE_LINES: isize = 10;
 const TIMER_STEP_MINUTES: u16 = 15;
 const TIMER_MAX_MINUTES: u16 = 480;
@@ -81,12 +83,16 @@ const TABS: [(Tab, &str, &str); 5] = [
     ),
 ];
 
-const HELP: [&str; 14] = [
+const ALARM_SOUND_HINTS: &str =
+    "j/k move · enter preview · s stop · +/- vol · 1-5 tab · ? help · q quit";
+
+const HELP: [&str; 15] = [
     "1 to 5      switch tab (tab and shift-tab also work)",
     "j k         move down and up (arrow keys also work)",
     "space       play or pause the current sound",
     "+ -         volume up and down",
     "enter       play the selected sound, or toggle the selected alarm",
+    "s           stop a ringing alarm, or an alarm sound being played",
     "a e d       add, edit or delete an alarm",
     "h l         change the selected setting",
     "r           ask the case for everything again",
@@ -224,6 +230,15 @@ pub fn on_key(app: &mut App, snapshot: &Snapshot, key: KeyEvent) -> Action {
         KeyCode::Char('c') => return Action::Reconnect,
         KeyCode::Char('A') => return Action::ConnectAudio,
         KeyCode::Char('?') => app.showing_help = true,
+        KeyCode::Char('s') => {
+            return Action::Send(match snapshot.sounding_alarm() {
+                Some(index) => vec![
+                    settings::stop_alarm(index),
+                    Frame::get(status::CURRENT_ALARM_STATE),
+                ],
+                None => vec![audio::stop_alarm_preview()],
+            });
+        }
         KeyCode::Char('r') => return Action::Send(Snapshot::survey().to_vec()),
         KeyCode::Char('1') => app.tab = Tab::Sounds,
         KeyCode::Char('2') => app.tab = Tab::Alarms,
@@ -260,7 +275,8 @@ pub fn on_key(app: &mut App, snapshot: &Snapshot, key: KeyEvent) -> Action {
             };
             match app.tab {
                 Tab::Sounds => {
-                    app.sound_row = stepped(app.sound_row, delta, snapshot.sound_loops.len());
+                    let count = snapshot.sound_loops.len() + snapshot.alarm_sounds.len();
+                    app.sound_row = stepped(app.sound_row, delta, count);
                 }
                 Tab::Alarms => {
                     app.alarm_row = stepped(app.alarm_row, delta, snapshot.alarms.len());
@@ -284,7 +300,13 @@ fn on_tab_key(app: &mut App, snapshot: &Snapshot, code: KeyCode) -> Action {
             if let Some(sound) = snapshot.sound_loops.get(app.sound_row) {
                 return Action::Send(snapshot.requests_to_play(sound.id));
             }
+            let alarm_row = app.sound_row - snapshot.sound_loops.len();
+            if let Some(sound) = snapshot.alarm_sounds.get(alarm_row) {
+                let volume = snapshot.volume.unwrap_or(PREVIEW_VOLUME);
+                return Action::Send(vec![audio::preview_alarm(sound.id, volume)]);
+            }
         }
+
         (Tab::Alarms, KeyCode::Char('a')) => {
             let slot = snapshot.free_alarm_slot();
             let sound = snapshot.alarm_sounds.first();
@@ -489,11 +511,19 @@ pub fn draw(canvas: &mut Canvas, app: &App, snapshot: &Snapshot) {
         Link::Connecting => Span::styled("○ connecting", Style::new().fg(Color::Yellow)),
         Link::Down(reason) => Span::styled(format!("○ {reason}"), Style::new().fg(Color::Red)),
     };
-    let hints = TABS.iter().find(|(tab, ..)| *tab == app.tab);
+    let on_alarm_sound = app.tab == Tab::Sounds
+        && app.sound_row >= snapshot.sound_loops.len()
+        && !snapshot.alarm_sounds.is_empty();
+    let hints = if on_alarm_sound {
+        ALARM_SOUND_HINTS
+    } else {
+        let tab = TABS.iter().find(|(tab, ..)| *tab == app.tab);
+        tab.map_or("", |(_, _, hints)| hints)
+    };
     let frame = Block::bordered()
         .title_top(" ozzzlo ")
         .title_top(Line::from(vec![Span::raw(" "), link, Span::raw(" ")]).right_aligned())
-        .title_bottom(key_hints(hints.map_or("", |(_, _, hints)| hints)));
+        .title_bottom(key_hints(hints));
     let inside = frame.inner(area);
     canvas.render_widget(frame, area);
     let [header, tabs, body, notice] = Layout::vertical([
@@ -531,7 +561,17 @@ pub fn draw(canvas: &mut Canvas, app: &App, snapshot: &Snapshot) {
             "Delete the {:02}:{:02} alarm? y to confirm",
             alarm.hour, alarm.minute
         );
-        popup(canvas, area, " Delete alarm ", vec![Line::raw(question)]);
+        let lines = vec![Line::raw(question)];
+        popup(canvas, area, " Delete alarm ", lines, Style::new());
+    }
+    if let Some(index) = snapshot.sounding_alarm() {
+        let alarm = snapshot.alarms.iter().find(|alarm| alarm.index == index);
+        let which = alarm.map_or(String::new(), |alarm| {
+            format!("{:02}:{:02} ", alarm.hour, alarm.minute)
+        });
+        let message = format!("The {which}alarm is ringing. s to stop");
+        let alert = Style::new().fg(Color::Red).add_modifier(Modifier::BOLD);
+        popup(canvas, area, " Alarm ", vec![Line::raw(message)], alert);
     }
     if app.showing_help {
         popup(
@@ -539,6 +579,7 @@ pub fn draw(canvas: &mut Canvas, app: &App, snapshot: &Snapshot) {
             area,
             " Keys ",
             HELP.iter().map(|line| Line::raw(*line)).collect(),
+            Style::new(),
         );
     }
 }
@@ -574,11 +615,7 @@ fn header_lines(snapshot: &Snapshot) -> Vec<Line<'static>> {
 
     let playing = match snapshot.playback {
         Some(playback) => {
-            let symbol = match playback.state {
-                PlayState::Playing => "▶",
-                PlayState::Paused => "‖",
-                PlayState::Stopped => "■",
-            };
+            let symbol = symbol_of(playback.state);
             format!("{symbol} {}", snapshot.loop_name(playback.loop_id))
         }
         None => "■ nothing known yet".to_string(),
@@ -631,25 +668,48 @@ fn draw_rows(canvas: &mut Canvas, area: Rect, rows: Vec<Line<'static>>, row: usi
     canvas.render_stateful_widget(list, list_area, &mut state);
 }
 
+fn symbol_of(state: PlayState) -> &'static str {
+    match state {
+        PlayState::Playing => "▶",
+        PlayState::Paused => "‖",
+        PlayState::Stopped => "■",
+    }
+}
+
 fn draw_sounds(canvas: &mut Canvas, area: Rect, app: &App, snapshot: &Snapshot) {
-    let current = snapshot.playback.map(|playback| playback.loop_id);
-    let rows = snapshot
-        .sound_loops
-        .iter()
-        .map(|sound| {
-            let marker = if current == Some(sound.id) {
-                "▶"
-            } else {
-                " "
-            };
-            Line::raw(format!(
-                "   {marker} {:<24} {}",
-                snapshot.loop_name(sound.id),
-                sound.label
-            ))
-        })
-        .collect();
-    draw_rows(canvas, area, rows, app.sound_row, "No sounds listed yet.");
+    let loops = snapshot.sound_loops.iter().map(|sound| {
+        let marker = match snapshot.playback {
+            Some(playback) if playback.loop_id == sound.id => symbol_of(playback.state),
+            _ => " ",
+        };
+        let name = snapshot.loop_name(sound.id);
+        Line::raw(format!("   {marker} {name:<24} {}", sound.label))
+    });
+    let alarms = snapshot.alarm_sounds.iter().map(|sound| {
+        let marker = if snapshot.previewing_alarm == Some(sound.id) {
+            "▶"
+        } else {
+            " "
+        };
+        let name = snapshot.alarm_sound_name(sound.id);
+        Line::raw(format!("   {marker} {name:<24} {}", sound.label))
+    });
+    let loop_count = snapshot.sound_loops.len();
+    if loop_count + snapshot.alarm_sounds.len() == 0 {
+        return draw_rows(canvas, area, Vec::new(), 0, "No sounds listed yet.");
+    }
+    let mut rows = vec![Line::styled("   Soundscapes", dim())];
+    rows.extend(loops);
+    rows.push(Line::raw(""));
+    rows.push(Line::styled("   Alarm sounds, preview only", dim()));
+    rows.extend(alarms);
+    // The list holds one heading above the soundscapes and two more lines above the alarm sounds.
+    let row = if app.sound_row < loop_count {
+        app.sound_row + 1
+    } else {
+        app.sound_row + 3
+    };
+    draw_rows(canvas, area, rows, row, "No sounds listed yet.");
 }
 
 fn draw_alarms(canvas: &mut Canvas, area: Rect, app: &App, snapshot: &Snapshot) {
@@ -771,7 +831,13 @@ fn draw_log(canvas: &mut Canvas, area: Rect, scroll: usize, lines: &[String]) {
     canvas.render_widget(Paragraph::new(visible.collect::<Vec<_>>()), area);
 }
 
-fn popup(canvas: &mut Canvas, area: Rect, title: &'static str, lines: Vec<Line<'static>>) {
+fn popup(
+    canvas: &mut Canvas,
+    area: Rect,
+    title: &'static str,
+    lines: Vec<Line<'static>>,
+    style: Style,
+) {
     let widest = lines.iter().map(Line::width).max().unwrap_or(0);
     let width = (widest as u16 + 4).clamp(30, area.width);
     let height = (lines.len() as u16 + 4).min(area.height);
@@ -789,7 +855,9 @@ fn popup(canvas: &mut Canvas, area: Rect, title: &'static str, lines: Vec<Line<'
     }));
     canvas.render_widget(Clear, place);
     canvas.render_widget(
-        Paragraph::new(padded).block(Block::bordered().title_top(title)),
+        Paragraph::new(padded)
+            .block(Block::bordered().title_top(title))
+            .style(style),
         place,
     );
 }
@@ -859,7 +927,7 @@ fn draw_dialog(canvas: &mut Canvas, area: Rect, dialog: &AlarmDialog, snapshot: 
     } else {
         " Edit alarm "
     };
-    popup(canvas, area, title, lines);
+    popup(canvas, area, title, lines, Style::new());
 }
 
 type Attempt = Pin<Box<dyn Future<Output = Result<Case, case::Error>>>>;
@@ -1030,7 +1098,22 @@ async fn send_all(
     requests: Vec<Frame>,
 ) -> Result<(), case::Error> {
     for request in requests {
-        match case.exchange(&request, |frame| snapshot.apply(frame)).await {
+        // The case does not answer a Set.
+        if request.operator == Operator::Set {
+            case.send(&request).await?;
+            continue;
+        }
+        // An alarm sound answers Processing when it starts and Result only when it ends.
+        let settles = |frame: &Frame| {
+            frame.answers(&request)
+                || (frame.function == audio::ALARM_PREVIEW && request.function == frame.function)
+        };
+        let reply = case
+            .exchange_until(&request, settles, case::REPLY_TIMEOUT, |frame| {
+                snapshot.apply(frame);
+            })
+            .await;
+        match reply {
             Ok(_) => {}
             Err(error @ (case::Error::Refused(..) | case::Error::Hazardous(_))) => {
                 log::warn!("{error}");
@@ -1158,15 +1241,106 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_an_alarm_sound_previews_it_and_s_stops_it() {
+        let snapshot = replayed();
+        let mut app = App::default();
+        press(&mut app, &snapshot, KeyCode::Char('j'));
+        press(&mut app, &snapshot, KeyCode::Char('j'));
+        assert_eq!(
+            sent(press(&mut app, &snapshot, KeyCode::Enter)),
+            ["05 08 05 02 08 28"]
+        );
+        assert_eq!(
+            sent(press(&mut app, &snapshot, KeyCode::Char('s'))),
+            ["05 08 05 02 ff 00"]
+        );
+    }
+
+    #[test]
+    fn a_ringing_alarm_shows_a_popup_and_s_stops_it() {
+        let mut snapshot = replayed();
+        snapshot.apply(&"02 0a 03 02 00 01".parse().unwrap());
+        let mut app = App {
+            link: Link::Up,
+            ..App::default()
+        };
+        assert!(screen(&app, &snapshot, 80, 24).contains("alarm is ringing. s to stop"));
+        assert_eq!(
+            sent(press(&mut app, &snapshot, KeyCode::Char('s'))),
+            ["01 15 00 01 00", "02 0a 01 00"]
+        );
+        snapshot.apply(&"02 0a 03 02 00 00".parse().unwrap());
+        assert!(!screen(&app, &snapshot, 80, 24).contains("ringing"));
+    }
+
+    #[test]
+    fn the_sounds_tab_separates_soundscapes_from_alarm_sounds() {
+        let mut app = App {
+            link: Link::Up,
+            ..App::default()
+        };
+        let mut snapshot = replayed();
+        let shown = screen(&app, &snapshot, 80, 24);
+        assert!(shown.contains("Soundscapes"));
+        assert!(shown.contains("Alarm sounds"));
+        assert!(shown.contains("Wake Up"));
+        assert!(shown.contains("enter play"));
+
+        press(&mut app, &snapshot, KeyCode::Char('j'));
+        press(&mut app, &snapshot, KeyCode::Char('j'));
+        snapshot.apply(&"05 08 07 01 08".parse().unwrap());
+        let shown = screen(&app, &snapshot, 80, 24);
+        assert!(shown.contains("enter preview"));
+        assert!(shown.contains("▶ Wake Up"));
+    }
+
+    #[test]
+    fn the_selected_soundscape_carries_the_header_play_symbol() {
+        let app = App::default();
+        let mut snapshot = replayed();
+        assert_eq!(
+            screen(&app, &snapshot, 80, 24)
+                .matches("▶ Intimate Rain")
+                .count(),
+            2
+        );
+        snapshot.apply(&"05 07 03 03 12 02 00".parse().unwrap());
+        assert_eq!(
+            screen(&app, &snapshot, 80, 24)
+                .matches("‖ Intimate Rain")
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn the_ringing_popup_is_red() {
+        let mut snapshot = replayed();
+        snapshot.apply(&"02 0a 03 02 00 01".parse().unwrap());
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|canvas| draw(canvas, &App::default(), &snapshot))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row: String = (0..80).map(|x| buffer[(x, 11)].symbol()).collect();
+        let column = row
+            .find("ringing")
+            .expect("the popup text sits on the middle row");
+        let column = row[..column].chars().count() as u16;
+        assert_eq!(buffer[(column, 11)].fg, Color::Red);
+    }
+
+    #[test]
     fn the_cursor_stops_at_the_last_row() {
         let snapshot = replayed();
         let mut app = App::default();
         for _ in 0..5 {
             press(&mut app, &snapshot, KeyCode::Char('j'));
         }
-        assert_eq!(app.sound_row, 1);
-        press(&mut app, &snapshot, KeyCode::Char('k'));
-        press(&mut app, &snapshot, KeyCode::Char('k'));
+        assert_eq!(app.sound_row, 3);
+        for _ in 0..5 {
+            press(&mut app, &snapshot, KeyCode::Char('k'));
+        }
         assert_eq!(app.sound_row, 0);
     }
 

@@ -7,6 +7,7 @@ pub const BATTERY_LEVEL: Function = Function { block: 2, id: 2 };
 pub const CHARGING_STATE: Function = Function { block: 2, id: 5 };
 pub const BUDS_LOCATION: Function = Function { block: 2, id: 8 };
 pub const BUDS_CONNECTION_STATE: Function = Function { block: 2, id: 9 };
+pub const CURRENT_ALARM_STATE: Function = Function { block: 2, id: 10 };
 pub const CASE_LID_STATE: Function = Function { block: 2, id: 15 };
 
 /// Charge of the case and each bud, in percent.
@@ -28,6 +29,42 @@ impl BatteryLevel {
             [case, left, right, ..] => Ok(Self { case, left, right }),
             _ => Err(frame.malformed("case, left and right levels")),
         }
+    }
+}
+
+/// What an alarm is doing right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlarmPhase {
+    Stopped,
+    Sounding,
+    Snoozed,
+}
+
+/// The alarm the case last sounded, and whether it still does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AlarmState {
+    /// The slot of the alarm.
+    pub index: u8,
+    pub phase: AlarmPhase,
+}
+
+impl AlarmState {
+    /// Reads a `CurrentAlarmState` reply: alarm slot, then phase.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
+    pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
+        let phase = match frame.payload[..] {
+            [_, 0] => AlarmPhase::Stopped,
+            [_, 1] => AlarmPhase::Sounding,
+            [_, 2] => AlarmPhase::Snoozed,
+            _ => return Err(frame.malformed("alarm slot, then a phase from 0 to 2")),
+        };
+        Ok(Self {
+            index: frame.payload[0],
+            phase,
+        })
     }
 }
 
@@ -102,6 +139,15 @@ mod tests {
 
     fn captured(hex: &str) -> Frame {
         hex.parse().unwrap()
+    }
+
+    #[test]
+    fn alarm_state_reads_the_slot_and_phase() {
+        let idle = AlarmState::parse(&captured("02 0a 03 02 00 00")).unwrap();
+        assert_eq!(idle.phase, AlarmPhase::Stopped);
+        let sounding = AlarmState::parse(&captured("02 0a 03 02 0a 01")).unwrap();
+        assert_eq!((sounding.index, sounding.phase), (10, AlarmPhase::Sounding));
+        assert!(AlarmState::parse(&captured("02 0a 03 02 00 07")).is_err());
     }
 
     #[test]

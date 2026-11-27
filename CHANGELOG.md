@@ -13,11 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `sound check` command that prints the checksum each bud computes over a stored masking or alarm sound.
 - `sound add` and `sound remove` commands that store a new sound on the buds from LC3 files, and delete one. `sound replace` overwrites a sound in place. It follows the frames the phone app sends and has not run against hardware yet.
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
+- Alarm sounds in the Sounds tab, under the soundscapes. Enter plays the selected one in the buds as a preview and `s` stops it.
+- A red popup in the terminal interface while an alarm rings. `s` stops the alarm.
 - `A` key in the terminal interface that connects the computer to the buds for audio, which keeps the control link up.
 - Pairing guide in `docs/pairing.md`.
 
 ### Fixed
 
+- The marker beside the selected soundscape now shows playing, paused or stopped, as the header does. It was a play symbol in every state.
 - Soundscapes and alarm sounds from the full catalog now show their names. Newer ones such as Avenel and Aurora appeared as `M66` and `A11`.
 - `pair` no longer tells the user to hold the case button when the case is already in pairing mode or has not been reached yet. It reports each situation as it finds it.
 - `pair` no longer fails with "Not connected" when the link drops as the case enters pairing mode. It keeps retrying for two minutes.

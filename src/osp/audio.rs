@@ -1,9 +1,10 @@
 //! The AudioManagement block: playback and volume.
 
-use super::{Frame, Function, Malformed};
+use super::{Frame, Function, Malformed, Operator};
 
 pub const NOW_PLAYING: Function = Function { block: 5, id: 6 };
 pub const PLAYING_LOOP: Function = Function { block: 5, id: 7 };
+pub const ALARM_PREVIEW: Function = Function { block: 5, id: 8 };
 pub const SOUND_LOOP_VOLUME: Function = Function { block: 5, id: 9 };
 
 /// Whether a sound loop is audible.
@@ -121,6 +122,20 @@ pub fn stop(loop_id: u8) -> Frame {
     Frame::set_get(PLAYING_LOOP, vec![loop_id, PlayState::Stopped as u8, 0])
 }
 
+/// A request to play alarm sound `sound_id` in the buds at `volume`, from 0 to 100.
+pub fn preview_alarm(sound_id: u8, volume: u8) -> Frame {
+    Frame {
+        function: ALARM_PREVIEW,
+        operator: Operator::Start,
+        payload: vec![sound_id, volume],
+    }
+}
+
+/// A request to stop the alarm sound that [`preview_alarm`] started.
+pub fn stop_alarm_preview() -> Frame {
+    preview_alarm(0xff, 0)
+}
+
 /// A request to change the sound loop volume to `level`, from 0 to 100.
 pub fn change_volume_to(level: u8) -> Frame {
     Frame::set_get(SOUND_LOOP_VOLUME, vec![level])
@@ -133,6 +148,12 @@ mod tests {
     #[test]
     fn volume_change_matches_the_vendor_frame() {
         assert_eq!(change_volume_to(40).to_string(), "05 09 02 01 28");
+    }
+
+    #[test]
+    fn alarm_preview_requests_match_the_vendor_frames() {
+        assert_eq!(preview_alarm(50, 40).to_string(), "05 08 05 02 32 28");
+        assert_eq!(stop_alarm_preview().to_string(), "05 08 05 02 ff 00");
     }
 
     #[test]

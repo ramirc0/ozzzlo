@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use super::{Frame, Function, Malformed};
+use super::{Frame, Function, Malformed, Operator};
 
 pub const GET_ALL: Function = Function { block: 1, id: 1 };
 pub const PRODUCT_NAME: Function = Function { block: 1, id: 2 };
@@ -15,6 +15,7 @@ pub const AUTO_START: Function = Function { block: 1, id: 16 };
 pub const ALARM_SOUND_LIST: Function = Function { block: 1, id: 18 };
 pub const CURRENT_DATE_TIME: Function = Function { block: 1, id: 22 };
 pub const DELETE_ALARM: Function = Function { block: 1, id: 19 };
+pub const STOP_ALARM: Function = Function { block: 1, id: 21 };
 pub const BLUETOOTH_MODE: Function = Function { block: 1, id: 23 };
 
 /// A sound stored on the buds, as the case lists it.
@@ -269,6 +270,15 @@ pub fn store_alarm(alarm: &Alarm) -> Frame {
 /// A request to delete the alarm in slot `index`.
 pub fn delete_alarm(index: u8) -> Frame {
     Frame::set_get(DELETE_ALARM, vec![index])
+}
+
+/// A request to silence the sounding alarm in slot `index`.
+pub fn stop_alarm(index: u8) -> Frame {
+    Frame {
+        function: STOP_ALARM,
+        operator: Operator::Set,
+        payload: vec![index],
+    }
 }
 
 /// A request to make `loop_id` the selected sound loop.
@@ -587,6 +597,7 @@ mod tests {
 
     #[test]
     fn requests_match_the_vendor_frames() {
+        assert_eq!(stop_alarm(10).to_string(), "01 15 00 01 0a");
         let alarm = Alarm {
             index: 3,
             hour: 7,

@@ -26,7 +26,8 @@ const AUDIO_BEARER: &str = "org.bluez.Bearer.BREDR1";
 const LE_CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const DISCOVERY_ATTEMPTS: u32 = 20;
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
-const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long the case may take to answer an ordinary request.
+pub const REPLY_TIMEOUT: Duration = Duration::from_secs(3);
 const PAIRING_MODE_POLLS: u32 = 120;
 const PAIRING_MODE_OFF: Function = Function { block: 4, id: 8 };
 
