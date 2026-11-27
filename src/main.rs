@@ -5,6 +5,7 @@ mod logging;
 mod osp;
 mod sleep_log;
 mod snapshot;
+mod sound_names;
 mod tui;
 
 use std::path::{Path, PathBuf};
@@ -21,6 +22,7 @@ use osp::sounds::{self, Bud, Kind};
 use osp::status::BudsLocation;
 use osp::{Frame, Function, Operator, audio, product_info, settings, status};
 use snapshot::Snapshot;
+use sound_names::SoundNames;
 
 const MODE_CHANGE_POLLS: u32 = 8;
 const SLOW_REPLY: Duration = Duration::from_secs(15);
@@ -131,6 +133,9 @@ enum SoundAction {
         /// The LC3 file for the right bud.
         #[arg(long)]
         right: PathBuf,
+        /// A name for the sound, kept on this computer.
+        #[arg(long)]
+        name: Option<String>,
     },
     /// Overwrite sound OLD on both buds with a new sound ID. Both buds must be docked.
     Replace {
@@ -145,6 +150,17 @@ enum SoundAction {
         /// The LC3 file for the right bud.
         #[arg(long)]
         right: PathBuf,
+        /// A name for the sound, kept on this computer.
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Name sound ID on this computer. The buds store no names.
+    Name {
+        id: u8,
+        /// The store the sound is in.
+        #[arg(long, value_enum)]
+        kind: Kind,
+        name: String,
     },
     /// Delete sound ID from both buds. Both buds must be docked.
     Remove {
@@ -246,8 +262,19 @@ async fn run(command: Command) -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    if let Command::Sound {
+        action: SoundAction::Name { id, kind, name },
+    } = &command
+    {
+        rename_sound(&mut SoundNames::load(), *kind, *id, Some(name))?;
+        println!("{kind:?} sound {id} is now `{name}` on this computer");
+        return Ok(());
+    }
     let case = Case::connect().await.context("connecting to the case")?;
-    let mut snapshot = Snapshot::default();
+    let mut snapshot = Snapshot {
+        custom_names: SoundNames::load(),
+        ..Snapshot::default()
+    };
     match command {
         Command::Status => {
             survey(&case, &mut snapshot).await?;
@@ -386,6 +413,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
                     kind,
                     left,
                     right,
+                    name,
                 },
         } => {
             let files = [
@@ -393,6 +421,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
                 (Bud::Right, sound_file(&right)?),
             ];
             store_sound(&case, &mut snapshot, None, id, kind, &files).await?;
+            rename_sound(&mut snapshot.custom_names, kind, id, name.as_deref())?;
         }
         Command::Sound {
             action:
@@ -402,6 +431,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
                     kind,
                     left,
                     right,
+                    name,
                 },
         } => {
             let files = [
@@ -409,7 +439,12 @@ async fn run(command: Command) -> anyhow::Result<()> {
                 (Bud::Right, sound_file(&right)?),
             ];
             store_sound(&case, &mut snapshot, Some(old), id, kind, &files).await?;
+            rename_sound(&mut snapshot.custom_names, kind, old, None)?;
+            rename_sound(&mut snapshot.custom_names, kind, id, name.as_deref())?;
         }
+        Command::Sound {
+            action: SoundAction::Name { .. },
+        } => bail!("naming is handled before connecting"),
         Command::Sound {
             action: SoundAction::Remove { id, kind },
         } => {
@@ -417,6 +452,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
             case.exchange(&sounds::remove(id, kind), |_| {})
                 .await
                 .with_context(|| format!("removing {kind:?} sound {id}"))?;
+            rename_sound(&mut snapshot.custom_names, kind, id, None)?;
             println!("removed {kind:?} sound {id}");
         }
         Command::Pair => bail!("pairing is handled before connecting"),
@@ -452,7 +488,9 @@ async fn play(case: &Case, snapshot: &mut Snapshot, sound: Option<String>) -> an
     ask(case, snapshot, &Frame::get(settings::SOUND_LOOP_LIST)).await?;
     ask(case, snapshot, &Frame::get(audio::PLAYING_LOOP)).await?;
     let target = match sound {
-        Some(wanted) => sound_matching(&wanted, &snapshot.sound_loops, settings::loop_title)?,
+        Some(wanted) => {
+            sound_matching(&wanted, &snapshot.sound_loops, |id| snapshot.loop_name(id))?
+        }
         None => {
             snapshot
                 .playback
@@ -514,6 +552,22 @@ async fn stored_checksum(case: &Case, bud: Bud, kind: Kind, id: u8) -> anyhow::R
         .await
         .with_context(|| format!("asking the {bud:?} bud for the checksum of sound {id}"))?;
     Ok(sounds::parse_checksum(&reply)?)
+}
+
+/// Gives sound `id` the user's `name`, or drops its name, and saves the names file.
+fn rename_sound(
+    names: &mut SoundNames,
+    kind: Kind,
+    id: u8,
+    name: Option<&str>,
+) -> anyhow::Result<()> {
+    match name {
+        Some(name) => names.name(kind, id, name),
+        None => names.forget(kind, id),
+    }
+    names
+        .save()
+        .with_context(|| format!("writing {}", SoundNames::file_path().display()))
 }
 
 /// Reads an LC3 file and checks it has the settings the buds play.
@@ -727,13 +781,13 @@ fn print_playback(snapshot: &Snapshot) {
 fn sound_matching(
     wanted: &str,
     sounds: &[Sound],
-    title: fn(u8) -> Option<&'static str>,
+    name: impl Fn(u8) -> String,
 ) -> anyhow::Result<u8> {
     let wanted = wanted.to_lowercase();
     let found = sounds.iter().find(|sound| {
         wanted.parse() == Ok(sound.id)
             || sound.label.to_lowercase() == wanted
-            || title(sound.id).is_some_and(|title| title.to_lowercase().starts_with(&wanted))
+            || name(sound.id).to_lowercase().starts_with(&wanted)
     });
     match found {
         Some(sound) => Ok(sound.id),
@@ -762,8 +816,11 @@ async fn change_alarm(
             .copied()
             .with_context(|| format!("no alarm in slot {index}"))
     };
-    let alarm_sound =
-        |wanted: &str| sound_matching(wanted, &snapshot.alarm_sounds, settings::alarm_sound_title);
+    let alarm_sound = |wanted: &str| {
+        sound_matching(wanted, &snapshot.alarm_sounds, |id| {
+            snapshot.alarm_sound_name(id)
+        })
+    };
     let alarm = match action {
         AlarmAction::Delete { index } => {
             existing(index)?;
@@ -906,7 +963,8 @@ mod tests {
                 label: "M65".to_string(),
             },
         ];
-        let find = |wanted| sound_matching(wanted, &sounds, settings::loop_title).ok();
+        let name = |id| settings::loop_title(id).unwrap_or_default().to_string();
+        let find = |wanted| sound_matching(wanted, &sounds, name).ok();
         assert_eq!(find("6"), Some(6));
         assert_eq!(find("rain"), Some(6));
         assert_eq!(find("m65"), Some(65));

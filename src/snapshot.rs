@@ -5,10 +5,12 @@ use std::fmt;
 use crate::osp::audio::{self, NowPlaying, PlayState, Playback};
 use crate::osp::product_info::{self, FirmwareVersion};
 use crate::osp::settings::{self, Alarm, AutoStart, BluetoothMode, CaseClock, Sound};
+use crate::osp::sounds::Kind;
 use crate::osp::status::{
     self, AlarmPhase, AlarmState, BatteryLevel, BudsConnection, BudsLocation,
 };
 use crate::osp::{Frame, Malformed, Operator};
+use crate::sound_names::SoundNames;
 
 const ALARM_SLOTS: u8 = 30;
 
@@ -20,6 +22,8 @@ pub struct Snapshot {
     pub lid_open: Option<bool>,
     pub buds_location: Option<BudsLocation>,
     pub buds_connection: Option<BudsConnection>,
+    /// The user's own names for sounds. They take precedence over catalog names.
+    pub custom_names: SoundNames,
     pub alarm_state: Option<AlarmState>,
     pub playback: Option<Playback>,
     /// The alarm sound playing as a preview.
@@ -144,14 +148,20 @@ impl Snapshot {
         (0..ALARM_SLOTS).find(|slot| self.alarms.iter().all(|alarm| alarm.index != *slot))
     }
 
-    /// A display name for a sound loop: its marketing name, else the case's label.
+    /// A display name for a sound loop: the user's name, else its marketing
+    /// name, else the case's label.
     pub fn loop_name(&self, id: u8) -> String {
-        name_of(id, settings::loop_title(id), &self.sound_loops)
+        let custom = self.custom_names.name_of(Kind::Masking, id);
+        let title = custom.or_else(|| settings::loop_title(id));
+        name_of(id, title, &self.sound_loops)
     }
 
-    /// A display name for an alarm sound: its marketing name, else the case's label.
+    /// A display name for an alarm sound: the user's name, else its marketing
+    /// name, else the case's label.
     pub fn alarm_sound_name(&self, id: u8) -> String {
-        name_of(id, settings::alarm_sound_title(id), &self.alarm_sounds)
+        let custom = self.custom_names.name_of(Kind::Alarm, id);
+        let title = custom.or_else(|| settings::alarm_sound_title(id));
+        name_of(id, title, &self.alarm_sounds)
     }
 }
 
@@ -332,6 +342,18 @@ mod tests {
         assert_eq!(snapshot.previewing_alarm, Some(50));
         snapshot.apply(&"05 08 06 01 32".parse().unwrap());
         assert_eq!(snapshot.previewing_alarm, None);
+    }
+
+    #[test]
+    fn a_custom_name_wins_over_the_catalog_and_the_label() {
+        let mut snapshot = replayed();
+        snapshot.custom_names.name(Kind::Masking, 18, "My Rain");
+        snapshot
+            .custom_names
+            .name(Kind::Alarm, 50, "Great Fairy's Fountain");
+        assert_eq!(snapshot.loop_name(18), "My Rain");
+        assert_eq!(snapshot.alarm_sound_name(50), "Great Fairy's Fountain");
+        assert_eq!(snapshot.alarm_sound_name(8), "Wake Up!");
     }
 
     #[test]

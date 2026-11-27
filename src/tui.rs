@@ -20,6 +20,7 @@ use crate::osp::settings::{self, Alarm, AutoStart, BluetoothMode, CaseClock, Day
 use crate::osp::status::{self, BudsLocation};
 use crate::osp::{Frame, Function, Operator};
 use crate::snapshot::Snapshot;
+use crate::sound_names::SoundNames;
 
 const MIN_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 24;
@@ -978,7 +979,10 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
         }
     });
     let mut app = App::default();
-    let mut snapshot = Snapshot::default();
+    let mut snapshot = Snapshot {
+        custom_names: SoundNames::load(),
+        ..Snapshot::default()
+    };
     let mut phase = Phase::Connecting(Box::pin(Case::connect()));
     let mut retry = FIRST_RETRY;
     let mut battery_due = interval_at(Instant::now() + BATTERY_PERIOD, BATTERY_PERIOD);

@@ -61,7 +61,7 @@ ozzzlo play rain
 ozzzlo volume 35
 ozzzlo timer 45
 ozzzlo alarm add 07:30 --days weekdays
-ozzzlo sound add 11 --kind alarm --left left.lc3 --right right.lc3
+ozzzlo sound add 50 --kind alarm --left left.lc3 --right right.lc3 --name "Morning Bells"
 ```
 
 ## Help
@@ -75,6 +75,7 @@ ozzzlo alarm --help
 * One ozzzlo can hold the control link at a time. Close the interface before running a command.
 * The case serves one control host at a time. While the phone app is open and connected, ozzzlo cannot reach the case and gives up after 8 seconds. While ozzzlo is connected, the phone app cannot control the buds.
 * ozzzlo keeps a log at `~/.local/state/ozzzlo/ozzzlo.log`. It records every frame exchanged with the case, plus the case's Bluetooth address and serial number. `-v` echoes it to the terminal.
+* The buds store no names for sounds. ozzzlo names Ozlo's own sounds from a built-in table, and keeps the names you give in `~/.config/ozzzlo/sound-names`, one `kind id name` per line.
 * After a firmware update, `ozzzlo dump` prints every readable function as raw hex. A diff of two dumps shows what the update changed. Decode failures appear in the log as `WARN` lines that name the function.
 * `RUST_BACKTRACE=1` adds a stack trace to errors in the log. A crash always logs one.
 * ozzzlo refuses to send firmware-update, factory-reset and manufacturing commands.
