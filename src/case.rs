@@ -125,9 +125,7 @@ impl Case {
             // BlueZ without bearer support cannot tell an LE link from an audio link.
             _ => false,
         };
-        if !linked {
-            link_over_le(&device, object_path).await?;
-        }
+        ensure_le_link(&device, object_path, linked).await?;
         let osp = discovered(&device, OSP_CHARACTERISTIC).await?;
         let firmware_update = characteristic(&device, FIRMWARE_UPDATE_CHARACTERISTIC)
             .await
@@ -246,10 +244,10 @@ pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
     let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
     match bearer {
         Ok(Some(LeBearer { bonded: true, .. })) => return Ok(false),
-        Ok(Some(LeBearer {
-            connected: true, ..
-        })) => {}
-        _ => link_over_le(&device, object_path).await?,
+        Ok(Some(LeBearer { connected, .. })) => {
+            ensure_le_link(&device, object_path, connected).await?;
+        }
+        _ => ensure_le_link(&device, object_path, false).await?,
     }
     let information = discovered(&device, DEVICE_INFORMATION_CHARACTERISTIC).await?;
     let mut on_waiting = Some(on_waiting);
@@ -309,9 +307,27 @@ async fn known_case(session: &Session) -> Result<(Device, String), Error> {
     Err(Error::NoCase)
 }
 
+/// Brings the LE link to a state where GATT lookups answer.
+async fn ensure_le_link(device: &Device, object_path: String, linked: bool) -> Result<(), Error> {
+    // BlueZ can report the LE link up while it has forgotten the services,
+    // for example after the audio link reconnects. bluer then waits two
+    // minutes on every lookup. Cycling the LE link makes BlueZ resolve again.
+    if linked && !device.is_services_resolved().await? {
+        log::info!("BlueZ lost the case's services, cycling the LE link");
+        let path = object_path.clone();
+        let dropped = tokio::task::spawn_blocking(move || le_call(&path, "Disconnect")).await;
+        log::debug!("LE disconnect: {dropped:?}");
+        return link_over_le(device, object_path).await;
+    }
+    if !linked {
+        return link_over_le(device, object_path).await;
+    }
+    Ok(())
+}
+
 async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error> {
     log::info!("connecting to {} over LE", device.address());
-    let connected = tokio::task::spawn_blocking(move || le_connect(&object_path)).await;
+    let connected = tokio::task::spawn_blocking(move || le_call(&object_path, "Connect")).await;
     if !matches!(connected, Ok(Ok(()))) {
         log::warn!("LE-only connect failed ({connected:?}), using Device1.Connect");
         device.connect().await.map_err(|error| {
@@ -371,10 +387,10 @@ fn le_bearer(object_path: &str) -> Option<LeBearer> {
     })
 }
 
-fn le_connect(object_path: &str) -> Result<(), dbus::Error> {
+fn le_call(object_path: &str, method: &str) -> Result<(), dbus::Error> {
     let bus = Connection::new_system()?;
     bus.with_proxy("org.bluez", object_path, LE_CONNECT_TIMEOUT)
-        .method_call(LE_BEARER, "Connect", ())
+        .method_call(LE_BEARER, method, ())
 }
 
 #[cfg(test)]

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Connecting no longer hangs for two minutes when BlueZ reports the LE link up but has lost the case's services.
+
 ### Added
 
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
