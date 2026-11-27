@@ -15,11 +15,12 @@ It can:
 * play, pause and stop the sounds stored on the buds, and switch between them
 * change the volume, the sleep timer, auto-start and the Bluetooth mode
 * list, add, edit, toggle and delete alarms
+* add and remove the sounds stored on the buds, from LC3 files
 * run as a terminal interface that follows the case live
 
 It cannot:
 
-* upload new sounds to the buds
+* encode audio. A sound is one LC3 file per bud: 48 kHz, mono, 96 kbit/s, 10 ms frames
 * interpret sleep and health data. `ozzzlo sleep-data` saves the logs as timestamped records with raw payloads
 * update firmware
 * talk to the case over USB
@@ -60,6 +61,7 @@ ozzzlo play rain
 ozzzlo volume 35
 ozzzlo timer 45
 ozzzlo alarm add 07:30 --days weekdays
+ozzzlo sound add 11 --kind alarm --left left.lc3 --right right.lc3
 ```
 
 ## Help

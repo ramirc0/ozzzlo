@@ -167,6 +167,7 @@ impl TransferChannel {
                 Error::Disconnected
             })?;
             if length == 0 {
+                log::warn!("the case closed the transfer channel");
                 return Err(Error::Disconnected);
             }
             log::trace!("<= raw {:02x?}", &packet[..length]);
@@ -257,7 +258,10 @@ impl Case {
             };
             let bytes = match notification {
                 Ok(bytes) if !bytes.is_empty() => bytes,
-                Ok(_) => return Err(Error::Disconnected),
+                Ok(_) => {
+                    log::warn!("the notification stream ended");
+                    return Err(Error::Disconnected);
+                }
                 Err(error) => {
                     log::warn!("notification read failed: {error}");
                     return Err(Error::Disconnected);
@@ -282,6 +286,9 @@ impl Case {
     pub async fn open_transfer_channel(&self, psm: u16) -> Result<TransferChannel, Error> {
         let opened = async {
             let socket = Socket::<SeqPacket>::new_seq_packet()?;
+            // Without an LE source address, Linux sends on the channel without
+            // the length prefix, and the case closes it.
+            socket.bind(SocketAddr::any_le())?;
             socket.set_security(Security {
                 level: SecurityLevel::Medium,
                 key_size: 0,
