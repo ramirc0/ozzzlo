@@ -17,7 +17,7 @@ It can:
 * list, add, edit, toggle and delete alarms
 * run as a terminal interface that follows the case live
 
-The protocol was worked out by observation, and the notes are in `docs/`.
+The protocol was worked out by observation.
 It was tested on one Sleepbuds 2 case with firmware 02.11.2606025. Other firmware and the first-generation Sleepbuds are untested.
 
 ## Getting Started
