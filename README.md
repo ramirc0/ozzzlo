@@ -51,7 +51,7 @@ cargo install --path .
 ```
 ozzzlo pair
 ```
-* Keep the computer connected to the buds for audio while the interface is open. The case drops a control-only host after a few seconds.
+* Mark the case as trusted in the desktop's Bluetooth settings, so the computer reconnects audio by itself. The case drops a host that holds only the control link after a few seconds, and an audio link prevents that. In the interface, `A` connects audio by hand.
 * Open the interface, or run a single command.
 ```
 ozzzlo

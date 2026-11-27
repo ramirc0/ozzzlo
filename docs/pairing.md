@@ -22,6 +22,7 @@ Pairing mode lasts a few minutes and ends by itself. The case accepts new pairin
 
 1. Hold the case button for 3 seconds.
 2. Pair the case for audio in your desktop's Bluetooth settings. It appears as "Ozlo Sleepbuds 2".
+   Mark it as trusted there too. This matters: see "Keep audio connected" below.
 3. Run `ozzzlo pair`.
 4. Do what it prints. It reports one of these, and prints a new line when the situation changes.
 
@@ -45,8 +46,12 @@ In the terminal interface this shows as the link dropping and returning every ha
 Connect the computer to the buds for audio and the control link stays up.
 In the terminal interface, `A` does this. It takes the audio from any other device that had it.
 
-To avoid pressing `A` each time, mark the case as trusted in your Bluetooth settings. The computer then reconnects audio by itself when the buds wake, and the control link holds.
-Removing and re-pairing the case clears the trusted mark.
+### Trust the case
+
+Mark the case as trusted in your Bluetooth settings. The computer then reconnects audio by itself when the buds wake, and the control link holds without pressing `A`.
+With the case trusted, daily use is: put the buds in, run `ozzzlo`.
+
+Removing and re-pairing the case clears the trusted mark. Set it again afterwards.
 Single commands such as `ozzzlo volume 35` finish before the case goes idle, so they work either way.
 
 ## When it goes wrong
@@ -58,7 +63,7 @@ Single commands such as `ozzzlo volume 35` finish before the case goes idle, so 
 | `the case did not pair in time` | Two minutes passed without the case in pairing mode and in reach. | Hold the button and run `ozzzlo pair` again. |
 | `the case is not reachable over Bluetooth LE` | The phone app holds the control link, or the case is asleep or out of range. | Close the phone app. Open the lid. Try again. |
 | `another program is already talking to the case` | Another ozzzlo is running, often the terminal interface. | Quit it first. |
-| `the case went idle` in the terminal interface | No audio connection. | Press `A` to connect audio. |
+| `the case went idle` in the terminal interface | No audio connection. | Press `A` to connect audio. Trust the case to make this automatic. |
 
 ## Things to know
 
