@@ -181,8 +181,7 @@ async fn run(command: Command) -> anyhow::Result<()> {
         return Ok(());
     }
     if matches!(command, Command::Pair) {
-        let announce = || println!("Open the case lid and hold its button for 3 seconds.");
-        let newly_bonded = case::pair(announce)
+        let newly_bonded = case::pair(|guidance| println!("{guidance}"))
             .await
             .context("pairing with the case")?;
         if newly_bonded {

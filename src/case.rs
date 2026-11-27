@@ -235,45 +235,49 @@ impl Case {
 
 /// Bonds this host with the case over LE, which the case allows only in pairing mode.
 ///
-/// Calls `on_waiting` once if the case is not in pairing mode yet, then waits
-/// for the user to hold the case button. Returns `false` if a bond already
-/// existed.
+/// Calls `on_progress` with what the user should know or do each time the
+/// situation changes, and waits up to two minutes for the case to enter
+/// pairing mode. Returns `false` if a bond already existed.
 ///
 /// # Errors
 ///
 /// Fails with `NoCase` or `Disconnected` when the case cannot be reached,
 /// `NotInPairingMode` when the wait runs out, and `Bluetooth` when BlueZ
 /// rejects the pairing.
-pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
+pub async fn pair(mut on_progress: impl FnMut(&str)) -> Result<bool, Error> {
     let session = Session::new().await?;
     let (device, object_path) = known_case(&session).await?;
     // Without an agent of our own, the desktop's agent may prompt the user.
     let _agent = session
         .register_agent(bluer::agent::Agent::default())
         .await?;
-    let mut on_waiting = Some(on_waiting);
+    let mut last_guidance = "";
     let mut paired = false;
     // Holding the case button drops the LE link, and pairing mode can lapse
     // between the check and the pairing. Every step is retried until the
     // wait runs out.
     for _ in 0..PAIRING_MODE_POLLS {
-        match pairing_mode(&device, &object_path).await {
-            Ok(PairingMode::AlreadyBonded) => return Ok(false),
-            Ok(PairingMode::On) => {
-                log::info!("the case is in pairing mode, pairing");
-                match device.pair().await {
-                    Ok(()) => {
-                        paired = true;
-                        break;
-                    }
-                    Err(error) => log::warn!("pairing attempt failed: {error}"),
-                }
-            }
-            Ok(PairingMode::Off) => {}
-            Err(error) => log::debug!("waiting for the case: {error}"),
+        let state = pairing_mode(&device, &object_path).await;
+        if let Err(error) = &state {
+            log::debug!("waiting for the case: {error}");
         }
-        if let Some(announce) = on_waiting.take() {
-            announce();
+        if matches!(state, Ok(PairingMode::AlreadyBonded)) {
+            return Ok(false);
+        }
+        let guidance = guidance_for(&state);
+        if guidance != last_guidance {
+            on_progress(guidance);
+            last_guidance = guidance;
+        }
+        if matches!(state, Ok(PairingMode::On)) {
+            log::info!("the case is in pairing mode, pairing");
+            match device.pair().await {
+                Ok(()) => {
+                    paired = true;
+                    break;
+                }
+                Err(error) => log::warn!("pairing attempt failed: {error}"),
+            }
         }
         sleep(Duration::from_secs(1)).await;
     }
@@ -289,6 +293,18 @@ pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
     leave_pairing_mode.payload = vec![0];
     case.send(&leave_pairing_mode).await?;
     Ok(true)
+}
+
+/// What to tell the user for each thing a pairing-mode check can find.
+fn guidance_for(state: &Result<PairingMode, Error>) -> &'static str {
+    match state {
+        Ok(PairingMode::On) => "The case is in pairing mode. Pairing now.",
+        Ok(PairingMode::Off) => {
+            "The case is not in pairing mode. Hold its button for 3 seconds with the lid open."
+        }
+        Ok(PairingMode::AlreadyBonded) => "",
+        Err(_) => "Looking for the case. Keep its lid open.",
+    }
 }
 
 enum PairingMode {
@@ -448,6 +464,14 @@ fn le_call(object_path: &str, method: &str) -> Result<(), dbus::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_button_is_asked_for_only_when_pairing_mode_is_known_to_be_off() {
+        let asks_for_button = |state| guidance_for(&state).contains("Hold its button");
+        assert!(asks_for_button(Ok(PairingMode::Off)));
+        assert!(!asks_for_button(Ok(PairingMode::On)));
+        assert!(!asks_for_button(Err(Error::Disconnected)));
+    }
 
     #[test]
     fn pairing_mode_is_bit_zero_of_the_last_flag_byte() {
