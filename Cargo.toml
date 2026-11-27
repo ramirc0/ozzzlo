@@ -1,0 +1,8 @@
+[package]
+name = "ozlo"
+version = "0.0.0"
+edition = "2024"
+description = "Control Ozlo Sleepbuds from a Linux desktop"
+license = "MIT"
+
+[dependencies]

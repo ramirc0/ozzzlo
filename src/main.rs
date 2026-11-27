@@ -1,0 +1,3 @@
+mod osp;
+
+fn main() {}
