@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sleep-data` command that downloads the raw sleep and sensor logs from the case and buds without erasing them.
+
 ## [0.1.0] - 2026-11-27
 
 ### Added

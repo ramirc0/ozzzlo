@@ -6,6 +6,7 @@ mod osp;
 mod snapshot;
 mod tui;
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -13,11 +14,14 @@ use clap::{Parser, Subcommand};
 
 use case::Case;
 use osp::audio::PlayState;
+use osp::data::{self, LogExtent, Recorder};
 use osp::settings::{Alarm, AutoStart, BluetoothMode, CaseClock, Days, Sound};
 use osp::{Frame, Function, Operator, audio, product_info, settings, status};
 use snapshot::Snapshot;
 
 const MODE_CHANGE_POLLS: u32 = 8;
+// One chunk and its header must fit a single notification at the usual MTU.
+const LOG_CHUNK_BYTES: u32 = 200;
 
 /// Control Ozlo Sleepbuds from a Linux desktop.
 #[derive(Parser)]
@@ -72,6 +76,11 @@ enum Command {
     Alarm {
         #[command(subcommand)]
         action: Option<AlarmAction>,
+    },
+    /// Download the raw sleep and sensor logs into DIRECTORY, without erasing them.
+    SleepData {
+        /// Where to write `case.bin`, `left-bud.bin` and `right-bud.bin`.
+        directory: PathBuf,
     },
     /// Bond this computer with the case so it accepts commands.
     Pair,
@@ -268,6 +277,24 @@ async fn run(command: Command) -> anyhow::Result<()> {
             }
             print_alarms(&snapshot);
         }
+        Command::SleepData { directory } => {
+            std::fs::create_dir_all(&directory)
+                .with_context(|| format!("creating {}", directory.display()))?;
+            let recorders = [
+                (Recorder::Case, "case.bin"),
+                (Recorder::LeftBud, "left-bud.bin"),
+                (Recorder::RightBud, "right-bud.bin"),
+            ];
+            for (recorder, name) in recorders {
+                match download_log(&case, recorder, &directory.join(name)).await {
+                    Ok(bytes) => println!("{name}: {bytes} bytes"),
+                    Err(error) => match error.downcast_ref::<case::Error>() {
+                        Some(case::Error::Refused(..)) => println!("{name}: skipped, {error:#}"),
+                        _ => return Err(error),
+                    },
+                }
+            }
+        }
         Command::Pair => bail!("pairing is handled before connecting"),
         Command::Dump => dump(&case).await?,
         Command::Raw { hex } => {
@@ -314,6 +341,23 @@ async fn play(case: &Case, snapshot: &mut Snapshot, sound: Option<String>) -> an
     }
     print_playback(snapshot);
     Ok(())
+}
+
+/// Copies `recorder`'s log to `path` and returns its size. The log stays on the device.
+async fn download_log(case: &Case, recorder: Recorder, path: &Path) -> anyhow::Result<u64> {
+    let opened = case.exchange(&data::open_log(recorder), |_| {}).await?;
+    let extent = LogExtent::parse(&opened)?;
+    log::info!("{recorder:?} log: {extent:?}");
+    let mut log_data = Vec::with_capacity(extent.size as usize);
+    while (log_data.len() as u32) < extent.size {
+        let read = log_data.len() as u32;
+        let count = (extent.size - read).min(LOG_CHUNK_BYTES);
+        let request = data::log_bytes(recorder, extent.start_offset + read, count);
+        let reply = case.exchange(&request, |_| {}).await?;
+        log_data.extend(data::chunk(&reply)?);
+    }
+    std::fs::write(path, &log_data).with_context(|| format!("writing {}", path.display()))?;
+    Ok(log_data.len() as u64)
 }
 
 fn print_playback(snapshot: &Snapshot) {

@@ -7,6 +7,7 @@ use std::fmt;
 use std::str::FromStr;
 
 pub mod audio;
+pub mod data;
 pub mod product_info;
 pub mod settings;
 pub mod status;
