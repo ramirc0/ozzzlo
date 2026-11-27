@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
-- `sleep-data` command that downloads the raw sleep and sensor logs from the case and buds without erasing them.
+- `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
 
 ## [0.1.0] - 2026-11-27
 

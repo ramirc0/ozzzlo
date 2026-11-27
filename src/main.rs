@@ -3,6 +3,7 @@
 mod case;
 mod logging;
 mod osp;
+mod sleep_log;
 mod snapshot;
 mod tui;
 
@@ -20,6 +21,7 @@ use osp::{Frame, Function, Operator, audio, product_info, settings, status};
 use snapshot::Snapshot;
 
 const MODE_CHANGE_POLLS: u32 = 8;
+const LOG_NAMES: [&str; 3] = ["case", "left-bud", "right-bud"];
 // One chunk and its header must fit a single notification at the usual MTU.
 const LOG_CHUNK_BYTES: u32 = 200;
 
@@ -77,10 +79,15 @@ enum Command {
         #[command(subcommand)]
         action: Option<AlarmAction>,
     },
-    /// Download the raw sleep and sensor logs into DIRECTORY, without erasing them.
+    /// Download the sleep and sensor logs into DIRECTORY, without erasing them.
+    ///
+    /// Each log is saved raw as `.bin` and split into records as `.csv`.
     SleepData {
-        /// Where to write `case.bin`, `left-bud.bin` and `right-bud.bin`.
+        /// Where to write `case`, `left-bud` and `right-bud` files.
         directory: PathBuf,
+        /// Rebuild the `.csv` files from `.bin` files already in DIRECTORY.
+        #[arg(long)]
+        offline: bool,
     },
     /// Bond this computer with the case so it accepts commands.
     Pair,
@@ -158,6 +165,21 @@ async fn main() {
 }
 
 async fn run(command: Command) -> anyhow::Result<()> {
+    if let Command::SleepData {
+        directory,
+        offline: true,
+    } = &command
+    {
+        for name in LOG_NAMES {
+            let raw = directory.join(name).with_extension("bin");
+            if raw.exists() {
+                let log =
+                    std::fs::read(&raw).with_context(|| format!("reading {}", raw.display()))?;
+                println!("{name}: {} records", write_csv(directory, name, &log)?);
+            }
+        }
+        return Ok(());
+    }
     if matches!(command, Command::Pair) {
         let announce = || println!("Open the case lid and hold its button for 3 seconds.");
         let newly_bonded = case::pair(announce)
@@ -277,21 +299,21 @@ async fn run(command: Command) -> anyhow::Result<()> {
             }
             print_alarms(&snapshot);
         }
-        Command::SleepData { directory } => {
+        Command::SleepData { directory, .. } => {
             std::fs::create_dir_all(&directory)
                 .with_context(|| format!("creating {}", directory.display()))?;
-            let recorders = [
-                (Recorder::Case, "case.bin"),
-                (Recorder::LeftBud, "left-bud.bin"),
-                (Recorder::RightBud, "right-bud.bin"),
-            ];
-            for (recorder, name) in recorders {
-                match download_log(&case, recorder, &directory.join(name)).await {
-                    Ok(bytes) => println!("{name}: {bytes} bytes"),
-                    Err(error) => match error.downcast_ref::<case::Error>() {
-                        Some(case::Error::Refused(..)) => println!("{name}: skipped, {error:#}"),
-                        _ => return Err(error),
-                    },
+            let recorders = [Recorder::Case, Recorder::LeftBud, Recorder::RightBud];
+            for (recorder, name) in recorders.into_iter().zip(LOG_NAMES) {
+                match download_log(&case, recorder).await {
+                    Ok(log) => {
+                        let raw = directory.join(name).with_extension("bin");
+                        std::fs::write(&raw, &log)
+                            .with_context(|| format!("writing {}", raw.display()))?;
+                        let records = write_csv(&directory, name, &log)?;
+                        println!("{name}: {} bytes, {records} records", log.len());
+                    }
+                    Err(error @ case::Error::Refused(..)) => println!("{name}: skipped, {error}"),
+                    Err(error) => return Err(error).context("downloading the sleep logs"),
                 }
             }
         }
@@ -343,21 +365,38 @@ async fn play(case: &Case, snapshot: &mut Snapshot, sound: Option<String>) -> an
     Ok(())
 }
 
-/// Copies `recorder`'s log to `path` and returns its size. The log stays on the device.
-async fn download_log(case: &Case, recorder: Recorder, path: &Path) -> anyhow::Result<u64> {
+/// Reads `recorder`'s whole log. The log stays on the device.
+async fn download_log(case: &Case, recorder: Recorder) -> Result<Vec<u8>, case::Error> {
     let opened = case.exchange(&data::open_log(recorder), |_| {}).await?;
-    let extent = LogExtent::parse(&opened)?;
+    let extent = LogExtent::parse(&opened).map_err(|malformed| {
+        log::warn!("cannot decode {malformed}");
+        case::Error::NoReply(opened.function)
+    })?;
     log::info!("{recorder:?} log: {extent:?}");
-    let mut log_data = Vec::with_capacity(extent.size as usize);
-    while (log_data.len() as u32) < extent.size {
-        let read = log_data.len() as u32;
+    let mut log = Vec::with_capacity(extent.size as usize);
+    while (log.len() as u32) < extent.size {
+        let read = log.len() as u32;
         let count = (extent.size - read).min(LOG_CHUNK_BYTES);
         let request = data::log_bytes(recorder, extent.start_offset + read, count);
         let reply = case.exchange(&request, |_| {}).await?;
-        log_data.extend(data::chunk(&reply)?);
+        match data::chunk(&reply) {
+            Ok(bytes) => log.extend(bytes),
+            Err(malformed) => {
+                log::warn!("cannot decode {malformed}");
+                return Err(case::Error::NoReply(reply.function));
+            }
+        }
     }
-    std::fs::write(path, &log_data).with_context(|| format!("writing {}", path.display()))?;
-    Ok(log_data.len() as u64)
+    Ok(log)
+}
+
+/// Splits `log` into records and writes them as `NAME.csv`. Returns the record count.
+fn write_csv(directory: &Path, name: &str, log: &[u8]) -> anyhow::Result<usize> {
+    let records = sleep_log::records(log).with_context(|| format!("splitting the {name} log"))?;
+    let table = directory.join(name).with_extension("csv");
+    std::fs::write(&table, sleep_log::csv(name, &records))
+        .with_context(|| format!("writing {}", table.display()))?;
+    Ok(records.len())
 }
 
 fn print_playback(snapshot: &Snapshot) {

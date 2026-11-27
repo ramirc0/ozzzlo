@@ -20,7 +20,7 @@ It can:
 It cannot:
 
 * upload new sounds to the buds
-* decode sleep and health data. `ozzzlo sleep-data` downloads the raw logs only
+* interpret sleep and health data. `ozzzlo sleep-data` saves the logs as timestamped records with raw payloads
 * update firmware
 * talk to the case over USB
 * find a case the computer has never paired with
