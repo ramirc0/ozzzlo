@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
 - `sound check` command that prints the checksum each bud computes over a stored masking or alarm sound.
-- `sound add` and `sound remove` commands that store a new sound on the buds from LC3 files, and delete one. `sound replace` overwrites a sound in place. It follows the frames the phone app sends and has not run against hardware yet.
+- `sound add`, `sound replace` and `sound remove` commands that store a sound on the buds from LC3 files, overwrite one in place, and delete one.
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
 - Alarm sounds in the Sounds tab, under the soundscapes. Enter plays the selected one in the buds as a preview and `s` stops it.
 - A red popup in the terminal interface while an alarm rings. `s` stops the alarm.
