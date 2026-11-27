@@ -7,23 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Pressing `A` in the terminal interface no longer flashes two connection errors before the link settles. ozzzlo waits for the LE connection BlueZ already has under way.
-- The terminal interface no longer asks for the battery level each time the case reports its charging state, which was every 30 seconds.
-- `pair` no longer tells the user to hold the case button when the case is already in pairing mode or has not been reached yet. It reports each situation as it finds it.
-- `pair` no longer fails with "Not connected" when the link drops as the case enters pairing mode. It keeps retrying for two minutes.
-- The terminal interface no longer reconnects two seconds after the case announces it is going idle, which kept waking the case in a loop. It waits 30 seconds.
-- A command no longer waits 20 seconds when the phone app holds the case. It gives up after 8 seconds, says the phone app may be connected, and cancels the pending connection.
-- The terminal interface misread the case's disconnect reason, showing "reason 172" where the case had gone idle.
-- Connecting no longer hangs for two minutes when BlueZ reports the LE link up but has lost the case's services.
-
 ### Added
 
+- `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
+- `sound check` command that prints the checksum each bud computes over a stored sound.
+- Experimental `sound replace` command. The case refuses the request, so it does not work yet.
+- Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
 - `A` key in the terminal interface that connects the computer to the buds for audio, which keeps the control link up.
 - Pairing guide in `docs/pairing.md`.
-- Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
-- `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
+
+### Fixed
+
+- `pair` no longer tells the user to hold the case button when the case is already in pairing mode or has not been reached yet. It reports each situation as it finds it.
+- `pair` no longer fails with "Not connected" when the link drops as the case enters pairing mode. It keeps retrying for two minutes.
+- A command no longer waits 20 seconds when the phone app holds the case. It gives up after 8 seconds, says the phone app may be connected, and cancels the pending connection.
+- Connecting no longer hangs for two minutes when BlueZ reports the LE link up but has lost the case's services.
+- The terminal interface no longer reconnects two seconds after the case announces it is going idle, which kept waking the case in a loop. It waits 30 seconds.
+- The terminal interface no longer shows "reason 172" when the case goes idle. It read the disconnect reason from the wrong byte.
+- The terminal interface no longer asks for the battery level each time the case reports its charging state, which was every 30 seconds.
 
 ## [0.1.0] - 2026-11-27
 
@@ -39,3 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `dump` and `raw` commands for inspecting the protocol.
 - Log file with every frame exchanged, and backtraces on crashes.
 - Refusal to send firmware-update, factory-reset and manufacturing commands.
+
+[Unreleased]: https://github.com/ramirc0/ozzzlo/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ramirc0/ozzzlo/releases/tag/v0.1.0
