@@ -24,6 +24,7 @@ use crate::snapshot::Snapshot;
 const MIN_WIDTH: u16 = 80;
 const MIN_HEIGHT: u16 = 24;
 const VOLUME_STEP: u8 = 5;
+const LOG_PAGE_LINES: isize = 10;
 const TIMER_STEP_MINUTES: u16 = 15;
 const TIMER_MAX_MINUTES: u16 = 480;
 const FIRST_RETRY: Duration = Duration::from_secs(2);
@@ -74,7 +75,7 @@ const TABS: [(Tab, &str, &str); 5] = [
     (
         Tab::Log,
         "Log",
-        "j/k scroll · g top · G follow · 1-5 tab · ? help · q quit",
+        "j/k line · u/d page · g top · G follow · 1-5 tab · ? help · q quit",
     ),
 ];
 
@@ -319,6 +320,12 @@ fn on_tab_key(app: &mut App, snapshot: &Snapshot, code: KeyCode) -> Action {
                 };
                 return Action::Send(requests_to_store(&toggled));
             }
+        }
+        (Tab::Log, KeyCode::PageUp | KeyCode::Char('u')) => {
+            app.log_scroll = scrolled(app.log_scroll, -LOG_PAGE_LINES, logging::recent().len());
+        }
+        (Tab::Log, KeyCode::PageDown | KeyCode::Char('d')) => {
+            app.log_scroll = scrolled(app.log_scroll, LOG_PAGE_LINES, logging::recent().len());
         }
         (Tab::Log, KeyCode::Char('g')) => app.log_scroll = usize::MAX,
         (Tab::Log, KeyCode::Char('G')) => app.log_scroll = 0,
@@ -1251,6 +1258,8 @@ mod tests {
         assert_eq!(scrolled(2, 1, 40), 1);
         assert_eq!(scrolled(0, 1, 40), 0);
         assert_eq!(scrolled(usize::MAX, 1, 40), 39);
+        assert_eq!(scrolled(5, LOG_PAGE_LINES, 40), 0);
+        assert_eq!(scrolled(5, -LOG_PAGE_LINES, 40), 15);
     }
 
     #[test]
