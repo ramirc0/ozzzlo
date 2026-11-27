@@ -40,7 +40,7 @@ It was tested on one Sleepbuds 2 case with firmware 02.11.2606025. Other firmwar
 ### Installing
 
 ```
-git clone <this repository>
+git clone https://github.com/ramirc0/ozzzlo
 cd ozzzlo
 cargo install --path .
 ```
