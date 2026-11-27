@@ -86,8 +86,8 @@ pub fn loop_title(id: u8) -> Option<&'static str> {
         10 => "Warm Glow",
         11 => "Winter White",
         12 => "Pink Haze",
-        13 => "Green Dream",
-        14 => "Brown Noise",
+        13 => "Emerald Green",
+        14 => "Deep Brown",
         15 => "Oh So Gray",
         16 => "Into the Woods",
         17 => "Summer Nights",
@@ -97,17 +97,47 @@ pub fn loop_title(id: u8) -> Option<&'static str> {
         21 => "Rolling Thunder",
         22 => "Interstate",
         23 => "Beach Walk",
-        24 => "Beneath the Canopy",
+        24 => "Beneath The Canopy",
         25 => "All Aboard",
-        26 => "By the Bay",
+        26 => "By The Bay",
+        27 => "Rinse & Repeat",
         28 => "Autumn",
         29 => "Subtle Waves",
         30 => "Outboard",
         31 => "Rainy Nook",
         32 => "Base Camp",
+        33 => "Solena",
+        34 => "Elowen",
+        35 => "Starship",
+        36 => "Cosmic Drift",
         37 => "Mountain Air",
+        38 => "Sahara Gusts",
+        39 => "Forest Breeze",
         41 => "Emberwell",
         42 => "Steady Heat",
+        43 => "Heavy Idle",
+        44 => "Lost Lake",
+        45 => "Rolling Retreat",
+        46 => "Night Miles",
+        47 => "Bubbling Bliss",
+        49 => "Open Seas",
+        50 => "Distant Thunder",
+        51 => "Serelis",
+        52 => "Under The Blue",
+        53 => "Spring's Echo",
+        54 => "Monsoon Season",
+        55 => "Velora",
+        56 => "Purrfect",
+        57 => "Lunar Waves",
+        58 => "As the Grass Sways",
+        59 => "Frozen Tundra",
+        60 => "Winter's Warmth",
+        61 => "Simmer",
+        62 => "Echoing Earth",
+        63 => "Ice Drift",
+        64 => "The Night Watch",
+        65 => "Dream",
+        66 => "Avenel",
         _ => return None,
     })
 }
@@ -122,7 +152,11 @@ pub fn alarm_sound_title(id: u8) -> Option<&'static str> {
         4 => "Gilded Throne",
         5 => "Marimba March",
         6 => "Space Dust",
-        8 => "Wake Up",
+        8 => "Wake Up!",
+        9 => "Rise",
+        10 => "Morning Mischief",
+        11 => "Aurora",
+        12 => "Press Start",
         _ => return None,
     })
 }
@@ -465,6 +499,13 @@ pub fn product_name(frame: &Frame) -> Result<String, Malformed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titles_cover_the_newest_catalog_sounds() {
+        assert_eq!(loop_title(66), Some("Avenel"));
+        assert_eq!(alarm_sound_title(11), Some("Aurora"));
+        assert_eq!(loop_title(40), None);
+    }
 
     fn captured(hex: &str) -> Frame {
         hex.parse().unwrap()

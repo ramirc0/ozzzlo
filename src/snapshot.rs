@@ -241,7 +241,7 @@ mod tests {
         01 10 03 01 00
         01 17 03 03 01 00 00
         01 16 03 07 1a 0b 1b 05 02 23 0e
-        01 07 03 0c 02 00 02 4d 30 01 41 03 4d 36 35 01
+        01 07 03 0c 02 00 02 4d 30 01 28 03 4d 34 30 01
         01 06 03 08 01 00 06 2d 01 64 3e 08
         01 0b 04 01 05
         00 07 03 06 44 54 48 30 30 31";
@@ -302,7 +302,7 @@ mod tests {
     fn sounds_are_named_by_title_then_label_then_id() {
         let snapshot = replayed();
         assert_eq!(snapshot.loop_name(18), "Intimate Rain");
-        assert_eq!(snapshot.loop_name(65), "M65");
+        assert_eq!(snapshot.loop_name(40), "M40");
         assert_eq!(snapshot.loop_name(99), "sound 99");
     }
 

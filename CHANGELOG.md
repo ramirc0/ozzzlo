@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Soundscapes and alarm sounds from the full catalog now show their names. Newer ones such as Avenel and Aurora appeared as `M66` and `A11`.
 - `pair` no longer tells the user to hold the case button when the case is already in pairing mode or has not been reached yet. It reports each situation as it finds it.
 - `pair` no longer fails with "Not connected" when the link drops as the case enters pairing mode. It keeps retrying for two minutes.
 - A command no longer waits 20 seconds when the phone app holds the case. It gives up after 8 seconds, says the phone app may be connected, and cancels the pending connection.
