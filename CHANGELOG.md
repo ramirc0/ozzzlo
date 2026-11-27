@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Pairing guide in `docs/pairing.md`.
 - Log tab in the terminal interface that shows the log since startup and follows new lines, with line and page scrolling.
 - `sleep-data` command that downloads the sleep and sensor logs from the case and buds without erasing them, and splits them into CSV records. `--offline` rebuilds the CSV from saved logs.
 

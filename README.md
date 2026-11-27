@@ -47,11 +47,11 @@ cargo install --path .
 
 ### Executing program
 
-* Pair the case with the computer for audio, through the desktop's Bluetooth settings.
-* Bond ozzzlo with the case. Run the command, then hold the case button for 3 seconds with the lid open.
+* Pair the case twice: once for audio in the desktop's Bluetooth settings, and once for control with ozzzlo. [docs/pairing.md](docs/pairing.md) walks through it and lists what each message means.
 ```
 ozzzlo pair
 ```
+* Keep the computer connected to the buds for audio while the interface is open. The case drops a control-only host after a few seconds.
 * Open the interface, or run a single command.
 ```
 ozzzlo
