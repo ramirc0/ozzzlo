@@ -76,6 +76,11 @@ pub fn file_path() -> PathBuf {
 /// The file records debug and above for this crate, and warnings from other
 /// crates. `OZZZLO_LOG=trace` records everything from every crate.
 /// `verbosity` echoes to stderr: 1 for info, 2 or more for debug.
+///
+/// # Errors
+///
+/// Fails if the log directory or file cannot be created, or if a logger is
+/// already installed.
 pub fn start(verbosity: u8) -> anyhow::Result<()> {
     let path = file_path();
     let directory = path.parent().context("log path has no parent")?;

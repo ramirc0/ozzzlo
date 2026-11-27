@@ -27,11 +27,19 @@ pub struct Sound {
 
 impl Sound {
     /// Reads a `SoundLoopList` reply: a count, then ID, label and kind per sound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse_loops(frame: &Frame) -> Result<Vec<Self>, Malformed> {
         Self::parse_list(frame, 1)
     }
 
     /// Reads an `AlarmSoundList` reply: a count, then ID and label per sound.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse_alarm_sounds(frame: &Frame) -> Result<Vec<Self>, Malformed> {
         Self::parse_list(frame, 0)
     }
@@ -181,6 +189,10 @@ pub struct Alarm {
 
 impl Alarm {
     /// Reads an `Alarms` reply: a count, then one 7-byte record per alarm.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse_all(frame: &Frame) -> Result<Vec<Self>, Malformed> {
         let expected = "a count, then 7-byte alarm records";
         let [_count, records @ ..] = &frame.payload[..] else {
@@ -276,6 +288,10 @@ pub enum AutoStart {
 
 impl AutoStart {
     /// Reads an `AutoStart` reply: a mode, plus minutes for the delay mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         match frame.payload[..] {
             [0] => Ok(Self::Immediately),
@@ -324,6 +340,10 @@ pub enum BluetoothMode {
 
 impl BluetoothMode {
     /// Reads a `BluetoothMode` reply: a mode, then a 16-bit time remaining.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         match frame.payload[..] {
             [0, ..] => Ok(Self::Disabled),
@@ -384,6 +404,10 @@ pub struct CaseClock {
 impl CaseClock {
     /// Reads a `CurrentDateTime` reply: year since 2000, month, day, weekday,
     /// hour, minute, second.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         let [year, month, day, weekday, hour, minute, second] = frame.payload[..] else {
             return Err(frame.malformed("seven date and time bytes"));
@@ -415,6 +439,10 @@ impl CaseClock {
 }
 
 /// Reads a `SleepTimer` reply in minutes. Zero means the timer is off.
+///
+/// # Errors
+///
+/// Returns [`Malformed`] if the payload does not fit that layout.
 pub fn sleep_timer_minutes(frame: &Frame) -> Result<u16, Malformed> {
     match frame.payload[..] {
         [high, low] => Ok(u16::from_be_bytes([high, low])),
@@ -423,6 +451,10 @@ pub fn sleep_timer_minutes(frame: &Frame) -> Result<u16, Malformed> {
 }
 
 /// Reads a `ProductName` reply: a flag byte, then the name.
+///
+/// # Errors
+///
+/// Returns [`Malformed`] if the payload does not fit that layout.
 pub fn product_name(frame: &Frame) -> Result<String, Malformed> {
     match &frame.payload[..] {
         [_flag, name @ ..] => Ok(String::from_utf8_lossy(name).to_string()),

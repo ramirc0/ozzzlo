@@ -19,6 +19,10 @@ pub struct BatteryLevel {
 
 impl BatteryLevel {
     /// Reads a `BatteryLevel` reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         match frame.payload[..] {
             [case, left, right, ..] => Ok(Self { case, left, right }),
@@ -38,6 +42,10 @@ pub enum BudsLocation {
 
 impl BudsLocation {
     /// Reads a `BudsLocation` reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         match frame.payload[..] {
             [0] => Ok(Self::InCase),
@@ -60,6 +68,10 @@ pub struct BudsConnection {
 
 impl BudsConnection {
     /// Reads a `BudsConnectionState` reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         let [left, l_high, l_low, right, r_high, r_low] = frame.payload[..] else {
             return Err(frame.malformed("a connected flag and a 16-bit RSSI per bud"));
@@ -72,6 +84,10 @@ impl BudsConnection {
 }
 
 /// Reads a one-byte flag reply such as `CaseLidState` or `ChargingState`.
+///
+/// # Errors
+///
+/// Returns [`Malformed`] if the payload does not fit that layout.
 pub fn flag(frame: &Frame) -> Result<bool, Malformed> {
     match frame.payload[..] {
         [0] => Ok(false),

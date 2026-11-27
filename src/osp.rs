@@ -356,6 +356,10 @@ impl Frame {
     /// Serializes the frame as `[block, function, operator, length, payload...]`.
     ///
     /// Fails if the payload exceeds [`MAX_PAYLOAD`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::PayloadTooLong`] if the payload exceeds [`MAX_PAYLOAD`].
     pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
         if self.payload.len() > MAX_PAYLOAD {
             return Err(FrameError::PayloadTooLong(self.payload.len()));
@@ -374,6 +378,11 @@ impl Frame {
     ///
     /// The high bit of the block byte marks a two-byte big-endian length.
     /// Bytes after the declared payload are ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FrameError::Truncated`] if bytes are missing, and
+    /// [`FrameError::UnknownOperator`] if the operator is not a known one.
     pub fn decode(bytes: &[u8]) -> Result<Self, FrameError> {
         let [block, id, operator, rest @ ..] = bytes else {
             return Err(FrameError::Truncated);

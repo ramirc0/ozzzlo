@@ -101,6 +101,11 @@ impl Case {
     /// Opens the OSP channel to the first known device that offers the OSP service.
     ///
     /// Brings up the LE link if it is down, without touching the audio link.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `NoCase`, `NotBonded`, `LinkBusy` or `Disconnected` when the case
+    /// cannot be reached, and with `Bluetooth` when BlueZ reports a failure.
     pub async fn connect() -> Result<Self, Error> {
         let session = Session::new().await?;
         let adapter = session.default_adapter().await?;
@@ -172,6 +177,11 @@ impl Case {
     /// Writes `frame` to the case.
     ///
     /// Refuses hazardous functions.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Hazardous` for a dangerous function, `Frame` for an oversized
+    /// payload, and `Disconnected` when the write fails.
     pub async fn send(&self, frame: &Frame) -> Result<(), Error> {
         if frame.function.is_hazardous() {
             return Err(Error::Hazardous(frame.function));
@@ -186,6 +196,10 @@ impl Case {
     }
 
     /// Waits for the next frame the case sends, solicited or not.
+    ///
+    /// # Errors
+    ///
+    /// Fails with `Disconnected` when the link drops.
     pub async fn recv(&self) -> Result<Frame, Error> {
         loop {
             let notification = tokio::select! {
@@ -215,6 +229,11 @@ impl Case {
     ///
     /// `seen` receives every frame that arrives meanwhile, the answer included.
     /// An `Error` answer and a silent case both fail.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`Case::send`] does, with `NoReply` when the case stays silent, and
+    /// with `Refused` when it answers with an error code.
     pub async fn exchange(
         &self,
         request: &Frame,

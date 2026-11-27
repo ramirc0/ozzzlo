@@ -19,6 +19,10 @@ pub struct FirmwareVersion {
 
 impl FirmwareVersion {
     /// Reads a `FirmwareVersion` reply: four 13-byte strings.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         let mut versions = frame.payload.as_chunks::<13>().0.iter().map(|chunk| {
             String::from_utf8_lossy(chunk)
@@ -43,6 +47,10 @@ impl FirmwareVersion {
 }
 
 /// Reads a reply whose whole payload is text, dropping trailing NUL bytes.
+///
+/// # Errors
+///
+/// Returns [`Malformed`] if the payload does not fit that layout.
 pub fn text(frame: &Frame) -> Result<String, Malformed> {
     match std::str::from_utf8(&frame.payload) {
         Ok(text) => Ok(text.trim_end_matches('\0').to_string()),

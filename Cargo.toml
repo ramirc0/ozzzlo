@@ -13,12 +13,17 @@ tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
 anyhow = "1"
 jiff = "1"
 log = { version = "0.4", features = ["std"] }
+ratatui = "0.30"
 
 [profile.release]
 debug = "line-tables-only"
 
 [lints.rust]
 unsafe_code = "forbid"
+missing_docs = "warn"
 
 [lints.clippy]
 all = "warn"
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+mod_module_files = "warn"

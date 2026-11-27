@@ -34,6 +34,10 @@ pub struct Playback {
 
 impl Playback {
     /// Reads a `PlayingLoop` reply: loop ID, state, preview flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         let expected = "loop ID, play state from 0 to 2, preview flag";
         let [loop_id, state, _preview] = frame.payload[..] else {
@@ -54,6 +58,10 @@ pub struct NowPlaying {
 
 impl NowPlaying {
     /// Reads a `NowPlaying` reply: tag-value pairs.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Malformed`] if the payload does not fit that layout.
     pub fn parse(frame: &Frame) -> Result<Self, Malformed> {
         let expected = "tags 7 and 8 with 16-bit values, tags 9 to 11 with bytes";
         let (mut timer, mut state, mut loop_id) = (None, None, None);
@@ -87,6 +95,10 @@ impl NowPlaying {
 }
 
 /// Reads a `SoundLoopVolume` reply. The level is the second byte.
+///
+/// # Errors
+///
+/// Returns [`Malformed`] if the payload does not fit that layout.
 pub fn volume(frame: &Frame) -> Result<u8, Malformed> {
     match frame.payload[..] {
         [_, level] => Ok(level),

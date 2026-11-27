@@ -8,6 +8,8 @@ use crate::osp::settings::{self, Alarm, AutoStart, BluetoothMode, CaseClock, Sou
 use crate::osp::status::{self, BatteryLevel, BudsConnection, BudsLocation};
 use crate::osp::{Frame, Malformed, Operator};
 
+const ALARM_SLOTS: u8 = 30;
+
 /// The case's state, filled in as frames arrive. Unknown values are `None`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Snapshot {
@@ -82,6 +84,37 @@ impl Snapshot {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The requests that fill a fresh snapshot.
+    pub fn survey() -> [Frame; 5] {
+        [
+            Frame::start(product_info::GET_ALL),
+            Frame::start(settings::GET_ALL),
+            Frame::start(status::GET_ALL),
+            Frame::get(audio::NOW_PLAYING),
+            Frame::get(audio::SOUND_LOOP_VOLUME),
+        ]
+    }
+
+    /// The requests that make `loop_id` the playing sound, in sending order.
+    ///
+    /// Each one is sent after the case answers the one before.
+    pub fn requests_to_play(&self, loop_id: u8) -> Vec<Frame> {
+        let mut requests = Vec::new();
+        if let Some(current) = self.playback.filter(|current| current.loop_id != loop_id) {
+            if current.state == PlayState::Playing {
+                requests.push(audio::pause(current.loop_id));
+            }
+            requests.push(settings::select_loop(loop_id));
+        }
+        requests.push(audio::play(loop_id));
+        requests
+    }
+
+    /// The lowest alarm slot not in use.
+    pub fn free_alarm_slot(&self) -> Option<u8> {
+        (0..ALARM_SLOTS).find(|slot| self.alarms.iter().all(|alarm| alarm.index != *slot))
     }
 
     /// A display name for a sound loop: its marketing name, else the case's label.
@@ -241,6 +274,28 @@ mod tests {
         let before = snapshot.clone();
         snapshot.apply(&"02 02 03 01 64".parse().unwrap());
         assert_eq!(snapshot, before);
+    }
+
+    #[test]
+    fn switching_sounds_pauses_then_selects_then_plays() {
+        let hex = |requests: Vec<Frame>| -> Vec<String> {
+            requests.iter().map(Frame::to_string).collect()
+        };
+        let snapshot = replayed();
+        assert_eq!(hex(snapshot.requests_to_play(18)), ["05 07 02 03 12 01 00"]);
+        assert_eq!(
+            hex(snapshot.requests_to_play(6)),
+            [
+                "05 07 02 03 12 02 00",
+                "01 08 02 01 06",
+                "05 07 02 03 06 01 00"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_free_alarm_slot_skips_used_indexes() {
+        assert_eq!(replayed().free_alarm_slot(), Some(1));
     }
 
     #[test]

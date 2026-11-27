@@ -1,7 +1,10 @@
+//! Control Ozlo Sleepbuds 2 from a Linux desktop, as a CLI and a TUI.
+
 mod case;
 mod logging;
 mod osp;
 mod snapshot;
+mod tui;
 
 use std::time::Duration;
 
@@ -14,7 +17,6 @@ use osp::settings::{Alarm, AutoStart, BluetoothMode, CaseClock, Days, Sound};
 use osp::{Frame, Function, Operator, audio, product_info, settings, status};
 use snapshot::Snapshot;
 
-const ALARM_SLOTS: u8 = 30;
 const MODE_CHANGE_POLLS: u32 = 8;
 
 /// Control Ozlo Sleepbuds from a Linux desktop.
@@ -25,7 +27,7 @@ struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     verbose: u8,
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Subcommand)]
@@ -123,10 +125,21 @@ enum AlarmAction {
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     let cli = Cli::parse();
-    if let Err(error) = logging::start(cli.verbose) {
+    // The interface owns the terminal, so it never echoes the log.
+    let echo = if cli.command.is_some() {
+        cli.verbose
+    } else {
+        0
+    };
+    if let Err(error) = logging::start(echo) {
         eprintln!("warning: logging is off: {error:#}");
     }
-    if let Err(error) = run(cli.command).await {
+    log::info!("ozzzlo {} started", env!("CARGO_PKG_VERSION"));
+    let outcome = match cli.command {
+        Some(command) => run(command).await,
+        None => tui::run().await,
+    };
+    if let Err(error) = outcome {
         log::error!("{error:?}");
         eprintln!("error: {error:#}");
         std::process::exit(1);
@@ -134,7 +147,6 @@ async fn main() {
 }
 
 async fn run(command: Command) -> anyhow::Result<()> {
-    log::info!("ozzzlo {} started", env!("CARGO_PKG_VERSION"));
     let case = Case::connect().await.context("connecting to the case")?;
     let mut snapshot = Snapshot::default();
     match command {
@@ -264,14 +276,7 @@ async fn ask(case: &Case, snapshot: &mut Snapshot, request: &Frame) -> anyhow::R
 
 /// Asks the case for its full state.
 async fn survey(case: &Case, snapshot: &mut Snapshot) -> anyhow::Result<()> {
-    let requests = [
-        Frame::start(product_info::GET_ALL),
-        Frame::start(settings::GET_ALL),
-        Frame::start(status::GET_ALL),
-        Frame::get(audio::NOW_PLAYING),
-        Frame::get(audio::SOUND_LOOP_VOLUME),
-    ];
-    for request in requests {
+    for request in Snapshot::survey() {
         ask(case, snapshot, &request).await?;
     }
     Ok(())
@@ -280,20 +285,18 @@ async fn survey(case: &Case, snapshot: &mut Snapshot) -> anyhow::Result<()> {
 async fn play(case: &Case, snapshot: &mut Snapshot, sound: Option<String>) -> anyhow::Result<()> {
     ask(case, snapshot, &Frame::get(settings::SOUND_LOOP_LIST)).await?;
     ask(case, snapshot, &Frame::get(audio::PLAYING_LOOP)).await?;
-    let current = snapshot
-        .playback
-        .context("the playback reply was malformed")?;
     let target = match sound {
         Some(wanted) => sound_matching(&wanted, &snapshot.sound_loops, settings::loop_title)?,
-        None => current.loop_id,
-    };
-    if target != current.loop_id {
-        if current.state == PlayState::Playing {
-            ask(case, snapshot, &audio::pause(current.loop_id)).await?;
+        None => {
+            snapshot
+                .playback
+                .context("the playback reply was malformed")?
+                .loop_id
         }
-        ask(case, snapshot, &settings::select_loop(target)).await?;
+    };
+    for request in snapshot.requests_to_play(target) {
+        ask(case, snapshot, &request).await?;
     }
-    ask(case, snapshot, &audio::play(target)).await?;
     print_playback(snapshot);
     Ok(())
 }
@@ -371,8 +374,8 @@ async fn change_alarm(
             volume,
         } => {
             let (hour, minute) = time_of_day(&time)?;
-            let index = (0..ALARM_SLOTS)
-                .find(|slot| snapshot.alarms.iter().all(|alarm| alarm.index != *slot))
+            let index = snapshot
+                .free_alarm_slot()
                 .context("every alarm slot is taken")?;
             let sound = match sound {
                 Some(wanted) => alarm_sound(&wanted)?,
