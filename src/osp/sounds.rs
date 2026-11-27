@@ -1,7 +1,7 @@
-//! Adding and verifying the sound files stored on the buds.
+//! Adding, replacing, removing and verifying the sound files stored on the buds.
 //!
-//! A sound is one LC3 file per bud. The frames here match a capture of the
-//! phone app adding an alarm sound.
+//! A sound is one LC3 file per bud. The frames here match captures of the
+//! phone app adding an alarm sound, removing it, and replacing a masking sound.
 
 use super::{Frame, Function, Malformed, Operator};
 
@@ -10,6 +10,8 @@ pub const ADD: Function = Function { block: 5, id: 29 };
 pub const TRANSFER: Function = Function { block: 5, id: 30 };
 pub const COMMIT: Function = Function { block: 5, id: 31 };
 pub const INTEGRITY_CHECK: Function = Function { block: 5, id: 34 };
+pub const REMOVE: Function = Function { block: 5, id: 35 };
+pub const REPLACE: Function = Function { block: 5, id: 36 };
 pub const UPLOAD_SESSION: Function = Function { block: 5, id: 37 };
 
 /// The L2CAP PSM of the channel that carries an upload.
@@ -120,6 +122,28 @@ pub fn add(id: u8, size: u32, kind: Kind, bud: Bud) -> Frame {
         function: ADD,
         operator: Operator::Start,
         payload,
+    }
+}
+
+/// A request to overwrite sound `old_id` on `bud` with a file of `size` bytes
+/// that will be known as `new_id`.
+pub fn replace(old_id: u8, new_id: u8, size: u32, kind: Kind, bud: Bud) -> Frame {
+    let mut payload = vec![old_id, new_id];
+    payload.extend(size.to_be_bytes());
+    payload.extend([kind as u8, bud as u8]);
+    Frame {
+        function: REPLACE,
+        operator: Operator::Start,
+        payload,
+    }
+}
+
+/// A request to delete sound `id` from both buds.
+pub fn remove(id: u8, kind: Kind) -> Frame {
+    Frame {
+        function: REMOVE,
+        operator: Operator::Set,
+        payload: vec![id, kind as u8],
     }
 }
 
@@ -242,7 +266,16 @@ mod tests {
             add(11, 109_818, Kind::Alarm, Bud::Left).to_string(),
             "05 1d 05 07 0b 00 01 ac fa 01 01"
         );
+        assert_eq!(
+            replace(10, 66, 353_696, Kind::Masking, Bud::Left).to_string(),
+            "05 24 05 08 0a 42 00 05 65 a0 00 01"
+        );
+        assert_eq!(remove(11, Kind::Alarm).to_string(), "05 23 00 02 0b 01");
         assert_eq!(transfer(Bud::Left, &[]).to_string(), "05 1e 05 01 01");
+        assert_eq!(
+            commit(66, Kind::Masking, Bud::Left).to_string(),
+            "05 1f 02 03 42 00 01"
+        );
         assert_eq!(
             commit(11, Kind::Alarm, Bud::Right).to_string(),
             "05 1f 02 03 0b 01 02"
@@ -265,6 +298,8 @@ mod tests {
         assert_eq!(bytes[..6], [0x85, 0x1e, 0x05, 0x03, 0x79, 0x01]);
         // The case grants 895 bytes per packet, and the envelope takes one.
         assert_eq!(bytes.len(), 894);
+        let last = transfer(Bud::Right, &[0u8; 272]).encode_long().unwrap();
+        assert_eq!(last[..6], [0x85, 0x1e, 0x05, 0x01, 0x11, 0x02]);
     }
 
     #[test]

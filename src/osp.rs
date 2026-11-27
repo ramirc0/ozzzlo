@@ -181,7 +181,7 @@ impl Function {
     pub fn is_hazardous(self) -> bool {
         matches!(
             (self.block, self.id),
-            (3 | 17, _) | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) | (5, 10 | 35 | 36) | (13, 1)
+            (3 | 17, _) | (4, 3 | 7 | 15 | 16 | 18 | 20 | 21) | (5, 10) | (13, 1)
         )
     }
 }
@@ -536,11 +536,9 @@ mod tests {
         for id in [3, 7, 15, 16, 18, 20, 21] {
             assert!(Function { block: 4, id }.is_hazardous());
         }
-        for id in [10, 35, 36] {
-            assert!(Function { block: 5, id }.is_hazardous());
-        }
-        // Adding a sound is allowed: `ozzzlo sound add` drives it.
-        for id in [29, 30, 31, 37] {
+        assert!(Function { block: 5, id: 10 }.is_hazardous());
+        // The `ozzzlo sound` commands drive these.
+        for id in [29, 30, 31, 35, 36, 37] {
             assert!(!Function { block: 5, id }.is_hazardous());
         }
         assert!(Function { block: 13, id: 1 }.is_hazardous());

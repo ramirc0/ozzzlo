@@ -94,7 +94,7 @@ enum Command {
         #[arg(long)]
         offline: bool,
     },
-    /// Inspect or add to the sound files stored on the buds.
+    /// Inspect, add, replace or remove the sound files stored on the buds.
     Sound {
         #[command(subcommand)]
         action: SoundAction,
@@ -131,6 +131,27 @@ enum SoundAction {
         /// The LC3 file for the right bud.
         #[arg(long)]
         right: PathBuf,
+    },
+    /// Overwrite sound OLD on both buds with a new sound ID. Both buds must be docked.
+    Replace {
+        old: u8,
+        id: u8,
+        /// The store the sound is in.
+        #[arg(long, value_enum)]
+        kind: Kind,
+        /// The LC3 file for the left bud.
+        #[arg(long)]
+        left: PathBuf,
+        /// The LC3 file for the right bud.
+        #[arg(long)]
+        right: PathBuf,
+    },
+    /// Delete sound ID from both buds. Both buds must be docked.
+    Remove {
+        id: u8,
+        /// The store the sound is in.
+        #[arg(long, value_enum)]
+        kind: Kind,
     },
 }
 
@@ -367,16 +388,36 @@ async fn run(command: Command) -> anyhow::Result<()> {
                     right,
                 },
         } => {
-            let mut files = Vec::new();
-            for (bud, path) in [(Bud::Left, left), (Bud::Right, right)] {
-                let file =
-                    std::fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
-                sounds::vet(&file)
-                    .map_err(anyhow::Error::msg)
-                    .with_context(|| format!("checking {}", path.display()))?;
-                files.push((bud, file));
-            }
-            add_sound(&case, &mut snapshot, id, kind, &files).await?;
+            let files = [
+                (Bud::Left, sound_file(&left)?),
+                (Bud::Right, sound_file(&right)?),
+            ];
+            store_sound(&case, &mut snapshot, None, id, kind, &files).await?;
+        }
+        Command::Sound {
+            action:
+                SoundAction::Replace {
+                    old,
+                    id,
+                    kind,
+                    left,
+                    right,
+                },
+        } => {
+            let files = [
+                (Bud::Left, sound_file(&left)?),
+                (Bud::Right, sound_file(&right)?),
+            ];
+            store_sound(&case, &mut snapshot, Some(old), id, kind, &files).await?;
+        }
+        Command::Sound {
+            action: SoundAction::Remove { id, kind },
+        } => {
+            require_docked_buds(&case, &mut snapshot).await?;
+            case.exchange(&sounds::remove(id, kind), |_| {})
+                .await
+                .with_context(|| format!("removing {kind:?} sound {id}"))?;
+            println!("removed {kind:?} sound {id}");
         }
         Command::Pair => bail!("pairing is handled before connecting"),
         Command::Dump => dump(&case).await?,
@@ -475,21 +516,17 @@ async fn stored_checksum(case: &Case, bud: Bud, kind: Kind, id: u8) -> anyhow::R
     Ok(sounds::parse_checksum(&reply)?)
 }
 
-/// Stores `files` on their buds as a new sound `id` of `kind`, and verifies
-/// each stored copy.
-async fn add_sound(
-    case: &Case,
-    snapshot: &mut Snapshot,
-    id: u8,
-    kind: Kind,
-    files: &[(Bud, Vec<u8>)],
-) -> anyhow::Result<()> {
-    // The case drops a control-only host within seconds, and an upload takes over a minute.
-    case::connect_audio()
-        .await
-        .context("connecting audio, which keeps the case awake during the upload")?;
+/// Reads an LC3 file and checks it has the settings the buds play.
+fn sound_file(path: &Path) -> anyhow::Result<Vec<u8>> {
+    let file = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    sounds::vet(&file)
+        .map_err(anyhow::Error::msg)
+        .with_context(|| format!("checking {}", path.display()))?;
+    Ok(file)
+}
+
+async fn require_docked_buds(case: &Case, snapshot: &mut Snapshot) -> anyhow::Result<()> {
     ask(case, snapshot, &Frame::start(status::GET_ALL)).await?;
-    ask(case, snapshot, &Frame::get(audio::PLAYING_LOOP)).await?;
     let docked = snapshot.buds_location == Some(BudsLocation::InCase);
     let linked = snapshot
         .buds_connection
@@ -497,15 +534,41 @@ async fn add_sound(
     if !docked || !linked {
         bail!("both buds must be in the case and connected to it");
     }
+    Ok(())
+}
+
+/// Stores `files` on their buds as sound `id` of `kind`, and verifies each
+/// stored copy. The sound overwrites `replaced`, or takes a free slot.
+async fn store_sound(
+    case: &Case,
+    snapshot: &mut Snapshot,
+    replaced: Option<u8>,
+    id: u8,
+    kind: Kind,
+    files: &[(Bud, Vec<u8>)],
+) -> anyhow::Result<()> {
+    // The case drops a control-only host within seconds, and an upload takes minutes.
+    case::connect_audio()
+        .await
+        .context("connecting audio, which keeps the case awake during the upload")?;
+    require_docked_buds(case, snapshot).await?;
+    ask(case, snapshot, &Frame::get(audio::PLAYING_LOOP)).await?;
     for (bud, _) in files {
         let holds = case
             .exchange(&sounds::buds_sounds(*bud, kind), |_| {})
             .await?;
-        if sounds::stored_ids(&holds).contains(&id) {
+        let held = sounds::stored_ids(&holds);
+        if held.contains(&id) && replaced != Some(id) {
             bail!("the {bud:?} bud already holds {kind:?} sound {id}");
         }
-        if !sounds::has_free_slot(&holds) {
-            bail!("the {bud:?} bud has no free {kind:?} slot. Remove a sound in the phone app");
+        match replaced {
+            Some(old) if !held.contains(&old) => {
+                bail!("the {bud:?} bud holds no {kind:?} sound {old}")
+            }
+            None if !sounds::has_free_slot(&holds) => {
+                bail!("the {bud:?} bud has no free {kind:?} slot. Remove or replace a sound")
+            }
+            _ => {}
         }
     }
     if let Some(playback) = snapshot
@@ -533,7 +596,7 @@ async fn add_sound(
 
     let mut outcome = Ok(());
     for (bud, file) in files {
-        outcome = upload(case, &channel, *bud, id, kind, file).await;
+        outcome = upload(case, &channel, *bud, replaced, id, kind, file).await;
         if outcome.is_err() {
             break;
         }
@@ -596,6 +659,7 @@ async fn upload(
     case: &Case,
     channel: &TransferChannel,
     bud: Bud,
+    replaced: Option<u8>,
     id: u8,
     kind: Kind,
     file: &[u8],
@@ -604,7 +668,11 @@ async fn upload(
     case.exchange(&sounds::buds_sounds(bud, kind), |_| {})
         .await?;
     println!("{bud:?} bud: announcing {} bytes", file.len());
-    let announce = sounds::add(id, file.len() as u32, kind, bud);
+    let size = file.len() as u32;
+    let announce = match replaced {
+        Some(old) => sounds::replace(old, id, size, kind, bud),
+        None => sounds::add(id, size, kind, bud),
+    };
     channel.send(&announce).await?;
     reply_to(&announce, case, channel, ERASE_PATIENCE)
         .await
