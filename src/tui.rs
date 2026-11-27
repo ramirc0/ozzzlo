@@ -31,7 +31,9 @@ const FIRST_RETRY: Duration = Duration::from_secs(2);
 const LONGEST_RETRY: Duration = Duration::from_secs(30);
 const BATTERY_PERIOD: Duration = Duration::from_secs(300);
 const DISCONNECT: Function = Function { block: 4, id: 2 };
-const IDLE_NOTICE: &str = "the case went idle";
+// The case drops a control-only host after a few seconds. An audio link keeps it awake.
+const IDLE_NOTICE: &str =
+    "the case went idle. It stays awake only with an audio connection. c reconnects";
 const AUTO_START_CHOICES: [AutoStart; 8] = [
     AutoStart::Immediately,
     AutoStart::Off,
@@ -1294,10 +1296,7 @@ mod tests {
     fn the_disconnect_reason_is_the_first_payload_byte() {
         // Captured after the lid closed: reason 34, then the host's address.
         let idle: Frame = "04 02 07 07 22 66 55 44 33 22 11".parse().unwrap();
-        assert_eq!(
-            disconnect_notice(&idle).as_deref(),
-            Some("the case went idle")
-        );
+        assert_eq!(disconnect_notice(&idle).as_deref(), Some(IDLE_NOTICE));
         let other: Frame = "04 02 07 01 06".parse().unwrap();
         assert_eq!(
             disconnect_notice(&other).as_deref(),

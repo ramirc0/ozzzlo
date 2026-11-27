@@ -69,7 +69,7 @@ ozzzlo --help
 ozzzlo alarm --help
 ```
 
-* The case answers only while its lid is open or the buds are in use.
+* The case drops a host that holds only the control link after a few seconds of idleness. Connect the computer to the buds for audio as well, and the control link stays up.
 * One ozzzlo can hold the control link at a time. Close the interface before running a command.
 * The case serves one control host at a time. While the phone app is open and connected, ozzzlo cannot reach the case and gives up after 8 seconds. While ozzzlo is connected, the phone app cannot control the buds.
 * ozzzlo keeps a log at `~/.local/state/ozzzlo/ozzzlo.log`. It records every frame exchanged with the case, plus the case's Bluetooth address and serial number. `-v` echoes it to the terminal.
