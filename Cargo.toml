@@ -1,5 +1,5 @@
 [package]
-name = "ozlo"
+name = "ozzzlo"
 version = "0.0.0"
 edition = "2024"
 description = "Control Ozlo Sleepbuds from a Linux desktop"
@@ -9,4 +9,13 @@ license = "MIT"
 bluer = { version = "0.17", features = ["bluetoothd"] }
 dbus = { version = "0.9", features = ["vendored"] }
 clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["rt", "macros", "time", "io-util"] }
+tokio = { version = "1", features = ["rt", "macros", "time", "sync"] }
+
+[profile.release]
+debug = "line-tables-only"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"
