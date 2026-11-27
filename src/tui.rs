@@ -1068,9 +1068,9 @@ async fn on_push(
         log::info!("{reason}");
         app.notice = Some(reason);
     }
-    // Battery is never pushed, but these pushes mean it is about to change.
-    let battery_moves = [status::CHARGING_STATE, status::BUDS_LOCATION];
-    if frame.operator == Operator::Status && battery_moves.contains(&frame.function) {
+    // A bud entering or leaving the case changes its charge reading soon after.
+    // The case pushes battery levels itself alongside its charging state.
+    if frame.operator == Operator::Status && frame.function == status::BUDS_LOCATION {
         let battery = vec![Frame::get(status::BATTERY_LEVEL)];
         return send_all(case, snapshot, app, battery).await;
     }

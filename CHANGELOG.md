@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Pressing `A` in the terminal interface no longer flashes two connection errors before the link settles. ozzzlo waits for the LE connection BlueZ already has under way.
+- The terminal interface no longer asks for the battery level each time the case reports its charging state, which was every 30 seconds.
 - `pair` no longer tells the user to hold the case button when the case is already in pairing mode or has not been reached yet. It reports each situation as it finds it.
 - `pair` no longer fails with "Not connected" when the link drops as the case enters pairing mode. It keeps retrying for two minutes.
 - The terminal interface no longer reconnects two seconds after the case announces it is going idle, which kept waking the case in a loop. It waits 30 seconds.

@@ -542,6 +542,26 @@ async fn link_over_le(device: &Device, object_path: String) -> Result<(), Error>
                 Error::Disconnected
             })?;
         }
+        // BlueZ is already bringing the LE link up, for example right after an
+        // audio connect. Wait for that attempt instead of failing or cancelling it.
+        Ok(Err(error)) if error.name().is_some_and(|name| name.contains("InProgress")) => {
+            log::info!("BlueZ is already connecting over LE, waiting for it");
+            for _ in 0..DISCOVERY_ATTEMPTS {
+                sleep(DISCOVERY_INTERVAL).await;
+                let path = cancel_path.clone();
+                let bearer = tokio::task::spawn_blocking(move || le_bearer(&path)).await;
+                if matches!(
+                    bearer,
+                    Ok(Some(LeBearer {
+                        connected: true,
+                        ..
+                    }))
+                ) {
+                    return Ok(());
+                }
+            }
+            return Err(Error::Disconnected);
+        }
         failed => {
             log::info!("LE connect failed: {failed:?}");
             // BlueZ keeps trying after the call times out, and a late success
@@ -587,7 +607,11 @@ async fn subscription_to(characteristic: &Characteristic) -> Result<Characterist
         .await
         .map_err(|error| match error.kind {
             bluer::ErrorKind::NotPermitted => Error::LinkBusy,
-            _ => Error::Bluetooth(error),
+            // The link can drop between discovery and subscription.
+            _ => {
+                log::info!("subscribing failed: {error}");
+                Error::Disconnected
+            }
         })
 }
 
