@@ -58,7 +58,8 @@ impl fmt::Display for Error {
         match self {
             Self::NoCase => write!(
                 f,
-                "no Sleepbuds case is known to Bluetooth. Pair it for audio first"
+                "this computer has never seen a Sleepbuds case. Hold the case button for \
+                 3 seconds with the lid open, pair it in your Bluetooth settings, then try again"
             ),
             Self::NotBonded => write!(
                 f,
@@ -73,7 +74,11 @@ impl fmt::Display for Error {
             Self::NoReply(function) => write!(f, "the case did not answer {function}"),
             Self::Refused(function, code) => write!(f, "the case refused {function}: {code}"),
             Self::Hazardous(function) => write!(f, "refusing to send {function}: it is hazardous"),
-            Self::NotInPairingMode => write!(f, "the case did not enter pairing mode in time"),
+            Self::NotInPairingMode => write!(
+                f,
+                "the case did not pair in time. Hold its button for 3 seconds with the lid open \
+                 and run `ozzzlo pair` again"
+            ),
             Self::Frame(error) => write!(f, "{error}"),
             Self::Bluetooth(error) => write!(f, "Bluetooth: {error}"),
         }
@@ -242,34 +247,39 @@ impl Case {
 pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
     let session = Session::new().await?;
     let (device, object_path) = known_case(&session).await?;
-    let bearer_path = object_path.clone();
-    let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
-    match bearer {
-        Ok(Some(LeBearer { bonded: true, .. })) => return Ok(false),
-        Ok(Some(LeBearer { connected, .. })) => {
-            ensure_le_link(&device, object_path, connected).await?;
-        }
-        _ => ensure_le_link(&device, object_path, false).await?,
-    }
-    let information = discovered(&device, DEVICE_INFORMATION_CHARACTERISTIC).await?;
-    let mut on_waiting = Some(on_waiting);
-    let mut polls = 0;
-    while !pairing_mode_is_on(&information.read().await?) {
-        if let Some(announce) = on_waiting.take() {
-            announce();
-        }
-        polls += 1;
-        if polls > PAIRING_MODE_POLLS {
-            return Err(Error::NotInPairingMode);
-        }
-        sleep(Duration::from_secs(1)).await;
-    }
-    log::info!("the case is in pairing mode, pairing");
     // Without an agent of our own, the desktop's agent may prompt the user.
     let _agent = session
         .register_agent(bluer::agent::Agent::default())
         .await?;
-    device.pair().await?;
+    let mut on_waiting = Some(on_waiting);
+    let mut paired = false;
+    // Holding the case button drops the LE link, and pairing mode can lapse
+    // between the check and the pairing. Every step is retried until the
+    // wait runs out.
+    for _ in 0..PAIRING_MODE_POLLS {
+        match pairing_mode(&device, &object_path).await {
+            Ok(PairingMode::AlreadyBonded) => return Ok(false),
+            Ok(PairingMode::On) => {
+                log::info!("the case is in pairing mode, pairing");
+                match device.pair().await {
+                    Ok(()) => {
+                        paired = true;
+                        break;
+                    }
+                    Err(error) => log::warn!("pairing attempt failed: {error}"),
+                }
+            }
+            Ok(PairingMode::Off) => {}
+            Err(error) => log::debug!("waiting for the case: {error}"),
+        }
+        if let Some(announce) = on_waiting.take() {
+            announce();
+        }
+        sleep(Duration::from_secs(1)).await;
+    }
+    if !paired {
+        return Err(Error::NotInPairingMode);
+    }
     log::info!("paired with {}", device.address());
     drop(session);
 
@@ -279,6 +289,32 @@ pub async fn pair(on_waiting: impl FnOnce()) -> Result<bool, Error> {
     leave_pairing_mode.payload = vec![0];
     case.send(&leave_pairing_mode).await?;
     Ok(true)
+}
+
+enum PairingMode {
+    AlreadyBonded,
+    On,
+    Off,
+}
+
+/// Links to the case if needed and reads whether it is in pairing mode.
+async fn pairing_mode(device: &Device, object_path: &str) -> Result<PairingMode, Error> {
+    let bearer_path = object_path.to_string();
+    let bearer = tokio::task::spawn_blocking(move || le_bearer(&bearer_path)).await;
+    let linked = match bearer {
+        Ok(Some(LeBearer { bonded: true, .. })) => return Ok(PairingMode::AlreadyBonded),
+        Ok(Some(LeBearer { connected, .. })) => connected,
+        _ => false,
+    };
+    ensure_le_link(device, object_path.to_string(), linked).await?;
+    let information = characteristic(device, DEVICE_INFORMATION_CHARACTERISTIC)
+        .await
+        .ok_or(Error::Disconnected)?;
+    if pairing_mode_is_on(&information.read().await?) {
+        Ok(PairingMode::On)
+    } else {
+        Ok(PairingMode::Off)
+    }
 }
 
 /// Whether the unencrypted device information blob reports pairing mode.

@@ -31,6 +31,7 @@ const FIRST_RETRY: Duration = Duration::from_secs(2);
 const LONGEST_RETRY: Duration = Duration::from_secs(30);
 const BATTERY_PERIOD: Duration = Duration::from_secs(300);
 const DISCONNECT: Function = Function { block: 4, id: 2 };
+const IDLE_NOTICE: &str = "the case went idle";
 const AUTO_START_CHOICES: [AutoStart; 8] = [
     AutoStart::Immediately,
     AutoStart::Off,
@@ -959,7 +960,14 @@ async fn session(terminal: &mut DefaultTerminal) -> anyhow::Result<()> {
                     Err(error) => {
                         // Keys typed at a dead link would fire all at once on reconnect.
                         while events.try_recv().is_ok() {}
-                        dropped(&mut app, &error, FIRST_RETRY)
+                        // Reconnecting at once would wake a case that just chose to sleep.
+                        let went_idle = app.notice.as_deref() == Some(IDLE_NOTICE);
+                        let wait = if went_idle {
+                            LONGEST_RETRY
+                        } else {
+                            FIRST_RETRY
+                        };
+                        dropped(&mut app, &error, wait)
                     }
                 }
             }
@@ -1009,7 +1017,7 @@ fn disconnect_notice(frame: &Frame) -> Option<String> {
         return None;
     }
     Some(match frame.payload.first() {
-        Some(34) => "the case went idle".to_string(),
+        Some(34) => IDLE_NOTICE.to_string(),
         Some(35) => "Bluetooth mode changed".to_string(),
         Some(code) => format!("the case is disconnecting (reason {code})"),
         None => "the case is disconnecting".to_string(),
